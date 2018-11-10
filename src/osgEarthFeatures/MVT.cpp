@@ -22,6 +22,7 @@
 #include <osgEarth/FileUtils>
 #include <osgEarth/GeoData>
 #include <osgEarthFeatures/FeatureSource>
+#include <osgDB/Registry>
 #include <list>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,8 @@
 
 using namespace osgEarth;
 using namespace osgEarth::Features;
+
+#define LC "[MVT] "
 
 #define CMD_BITS 3
 #define CMD_MOVETO 1
@@ -69,7 +72,8 @@ Geometry* decodeLine(const mapnik::vector::tile_feature& feature, const TileKey&
     int x = 0;
     int y = 0;
 
-    osgEarth::Symbology::LineString *geometry = new osgEarth::Symbology::LineString();
+    std::vector< osg::ref_ptr< osgEarth::Symbology::LineString > > lines;
+    osg::ref_ptr< osgEarth::Symbology::LineString > currentLine;
 
     for (int k = 0; k < feature.geometry_size();)
     {
@@ -82,8 +86,14 @@ Geometry* decodeLine(const mapnik::vector::tile_feature& feature, const TileKey&
         if (length > 0)
         {
             length--;
+
             if (cmd == SEG_MOVETO || cmd == SEG_LINETO)
             {
+                if (cmd == SEG_MOVETO)
+                {
+                    currentLine = new osgEarth::Symbology::LineString;
+                    lines.push_back( currentLine.get() );
+                }
                 int px = feature.geometry(k++);
                 int py = feature.geometry(k++);
                 px = zig_zag_decode(px);
@@ -97,12 +107,36 @@ Geometry* decodeLine(const mapnik::vector::tile_feature& feature, const TileKey&
 
                 double geoX = key.getExtent().xMin() + (width/(double)tileres) * (double)x;
                 double geoY = key.getExtent().yMax() - (height/(double)tileres) * (double)y;
-                geometry->push_back(geoX, geoY, 0);
+
+                if (currentLine.valid())
+                {
+                    currentLine->push_back(geoX, geoY, 0);
+                }
             }
         }
     }
 
-    return geometry;
+    currentLine = 0;
+
+    if (lines.size() == 0)
+    {
+        return 0;
+    }
+    else if (lines.size() == 1)
+    {
+        // Just return a simple LineString
+        return lines[0].release();
+    }
+    else
+    {
+        // Return a multilinestring
+        MultiGeometry* multi = new MultiGeometry;
+        for (unsigned int i = 0; i < lines.size(); i++)
+        {
+            multi->add(lines[i].get());
+        }
+        return multi;
+    }
 }
 
 Geometry* decodePoint(const mapnik::vector::tile_feature& feature, const TileKey& key, unsigned int tileres)
@@ -156,10 +190,10 @@ Geometry* decodePolygon(const mapnik::vector::tile_feature& feature, const  Tile
      https://github.com/mapbox/vector-tile-spec/tree/master/2.1
      Decoding polygons is a bit more difficult than lines or points.
      A Polygon geometry is either a single polygon or a multipolygon.  Each polygon has one exterior ring and zero or more interior rings.
-     The rings are in sequence and you must check the orientation of the ring to know if it's an exterior ring (new polygon) or an 
+     The rings are in sequence and you must check the orientation of the ring to know if it's an exterior ring (new polygon) or an
      interior ring (inner polygon of the current polygon).
      */
-    
+
 
     unsigned int length = 0;
     int cmd = -1;
@@ -171,10 +205,10 @@ Geometry* decodePolygon(const mapnik::vector::tile_feature& feature, const  Tile
     // The list of polygons we've collected
     std::vector< osg::ref_ptr< osgEarth::Symbology::Polygon > > polygons;
 
-    osg::ref_ptr< osgEarth::Symbology::Polygon > currentPolygon;    
+    osg::ref_ptr< osgEarth::Symbology::Polygon > currentPolygon;
 
     osg::ref_ptr< osgEarth::Symbology::Ring > currentRing;
-    
+
     for (int k = 0; k < feature.geometry_size();)
     {
         if (!length)
@@ -210,28 +244,37 @@ Geometry* decodePolygon(const mapnik::vector::tile_feature& feature, const  Tile
             }
             else if (cmd == (SEG_CLOSE & ((1 << cmd_bits) - 1)))
             {
-                // The orientation is the opposite of what we want for features.  clockwise means exterior ring, counter clockwise means interior                
+                // The orientation is the opposite of what we want for features.  clockwise means exterior ring, counter clockwise means interior
 
                 // Figure out what to do with the ring based on the orientation of the ring
                 Geometry::Orientation orientation = currentRing->getOrientation();
                 // Close the ring.
                 currentRing->close();
-                
+
                 // Clockwise means exterior ring.  Start a new polygon and add the ring.
                 if (orientation == Geometry::ORIENTATION_CW)
                 {
                     // osgearth orientations are reversed from mvt
                     currentRing->rewind(Geometry::ORIENTATION_CCW);
-                    
-                    currentPolygon = new osgEarth::Symbology::Polygon(&currentRing->asVector());                                            
+
+                    currentPolygon = new osgEarth::Symbology::Polygon(&currentRing->asVector());
                     polygons.push_back(currentPolygon.get());
-                }                
+                }
                 else if (orientation == Geometry::ORIENTATION_CCW)
                 // Counter clockwise means a hole, add it to the existing polygon.
                 {
-                    // osgearth orientations are reversed from mvt
-                    currentRing->rewind(Geometry::ORIENTATION_CW);                                       
-                    currentPolygon->getHoles().push_back( currentRing );
+                    if (currentPolygon.valid())
+                    {
+                        // osgearth orientations are reversed from mvt
+                        currentRing->rewind(Geometry::ORIENTATION_CW);
+                        currentPolygon->getHoles().push_back( currentRing );
+                    }
+                    else
+                    {
+                        // this means we encountered a "hole" without a parent outer ring,
+                        // discard for now -gw
+                        OE_INFO << LC << "Discarding improperly wound polygon (hole without an outer ring)\n";
+                    }
                 }
 
                 // Start a new ring
@@ -244,7 +287,7 @@ Geometry* decodePolygon(const mapnik::vector::tile_feature& feature, const  Tile
     currentPolygon = 0;
 
     if (polygons.size() == 0)
-    {        
+    {
         return 0;
     }
     else if (polygons.size() == 1)
@@ -282,11 +325,12 @@ bool
     }
 
     // Decompress the tile
+    std::string original((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.seekg (0, std::ios::beg);
     std::string value;
-    if ( !compressor->decompress(in, value) )
+    if (!compressor->decompress(in, value))
     {
-        OE_WARN << "Decompression failed" << std::endl;
-        return false;
+        value = original;
     }
 
 
@@ -303,7 +347,7 @@ bool
             {
                 const mapnik::vector::tile_feature &feature = layer.features().Get(j);
 
-                
+
                 osg::ref_ptr< Feature > oeFeature = new Feature(0, key.getProfile()->getSRS());
 
                 // Set the layer name as "mvt_layer" so we can filter it later
@@ -368,7 +412,7 @@ bool
                     }
                 }
 
-                
+
 
                 osg::ref_ptr< osgEarth::Symbology::Geometry > geometry;
 
@@ -392,7 +436,7 @@ bool
 
                 if (geometry)
                 {
-                    oeFeature->setGeometry( geometry );
+                    oeFeature->setGeometry( geometry.get() );
                     features.push_back(oeFeature.get());
                 }
             }

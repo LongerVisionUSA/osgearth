@@ -40,7 +40,6 @@ using namespace osgEarth::Threading;
 
 #define OSG_FORMAT "osgb"
 #define OSG_EXT   ".osgb"
-#define OSG_COMPRESS
 
 namespace
 {
@@ -107,8 +106,6 @@ namespace
 
         bool writeMetadata( const Config& meta );
 
-        std::string getHashedKey(const std::string&) const;
-
     protected:
         bool purgeDirectory( const std::string& dir );
 
@@ -122,9 +119,11 @@ namespace
         bool                              _binPathExists;
         std::string                       _metaPath;       // full path to the bin's metadata file
         std::string                       _binPath;        // full path to the bin's root folder
+        std::string                       _compressorName;
         osg::ref_ptr<osgDB::ReaderWriter> _rw;
         osg::ref_ptr<osgDB::Options>      _zlibOptions;
-        mutable Threading::Mutex          _mutex;
+        mutable Threading::ReadWriteMutex _mutex;
+        bool                              _debug;
     };
 
     void writeMeta( const std::string& fullPath, const Config& meta )
@@ -210,23 +209,6 @@ namespace
 
     //------------------------------------------------------------------------
 
-    std::string
-    FileSystemCacheBin::getHashedKey(const std::string& key) const
-    {
-        if ( getHashKeys() )
-        {
-            unsigned hash = osgEarth::hashString(key);
-            unsigned b1 = (hash & 0xfff00000) >> 20;
-            unsigned b2 = (hash & 0x000fff00) >> 8;
-            unsigned b3 = (hash & 0x000000ff);
-            return Stringify() << std::hex << std::setfill('0') << std::setw(3) << b1 << "/" << b2 << "/" << std::setw(2) << b3;
-        }
-        else
-        {
-            return osgEarth::toLegalFileName(key);
-        }
-    }
-
     bool
     FileSystemCacheBin::binValidForReading(bool silent)
     {
@@ -298,12 +280,23 @@ namespace
 
         _rw = osgDB::Registry::instance()->getReaderWriterForExtension(OSG_FORMAT);
 
-#ifdef OSG_COMPRESS
-#ifdef OSGEARTH_HAVE_ZLIB
         _zlibOptions = Registry::instance()->cloneOrCreateOptions();
-        _zlibOptions->setPluginStringData("Compressor", "zlib");
-#endif        
-#endif
+
+        if (::getenv(OSGEARTH_ENV_DEFAULT_COMPRESSOR) != 0L)
+        {
+            _compressorName = ::getenv(OSGEARTH_ENV_DEFAULT_COMPRESSOR);
+        }
+        else
+        {
+            _compressorName = "zlib";
+        }
+
+        if (_compressorName.length() > 0)
+        {
+            _zlibOptions->setPluginStringData("Compressor", _compressorName);
+        }
+
+        _debug = ::getenv("OSGEARTH_CACHE_DEBUG") != 0L;
     }
 
     const osgDB::Options*
@@ -320,7 +313,10 @@ namespace
         else
         {
             osgDB::Options* merged = Registry::cloneOrCreateOptions(dbo);
-            merged->setPluginStringData("Compressor", "zlib");
+            if (_compressorName.length())
+            {
+                merged->setPluginStringData("Compressor", _compressorName);
+            }
             return merged;
         }
     }
@@ -332,7 +328,7 @@ namespace
             return ReadResult(ReadResult::RESULT_NOT_FOUND);
 
         // mangle "key" into a legal path name
-        URI fileURI( getHashedKey(key), _metaPath );
+        URI fileURI( key, _metaPath );
         std::string path = fileURI.full() + OSG_EXT;
 
         if ( !osgDB::fileExists(path) )
@@ -344,7 +340,7 @@ namespace
 
         osgDB::ReaderWriter::ReadResult r;
         {
-            ScopedMutexLock lock(_mutex);
+            ScopedReadLock lock(_mutex);
 
             r = _rw->readImage( path, dbo.get() );
             if ( !r.success() )
@@ -358,6 +354,10 @@ namespace
 
             ReadResult rr( r.getImage(), meta );
             rr.setLastModifiedTime(timeStamp);
+
+            if (_debug)
+                OE_NOTICE << LC << "Read image \"" << key << "\" from cache bin [" << getID() << "] path=" << fileURI.full() << "." << OSG_EXT << std::endl;
+
             return rr;            
         }
     }
@@ -369,7 +369,7 @@ namespace
             return ReadResult(ReadResult::RESULT_NOT_FOUND);
 
         // mangle "key" into a legal path name
-        URI fileURI( getHashedKey(key), _metaPath );
+        URI fileURI( key, _metaPath );
         std::string path = fileURI.full() + OSG_EXT;
 
         if ( !osgDB::fileExists(path) )
@@ -381,7 +381,7 @@ namespace
 
         osgDB::ReaderWriter::ReadResult r;
         {
-            ScopedMutexLock lock(_mutex);
+            ScopedReadLock lock(_mutex);
 
             r = _rw->readObject( path, dbo.get() );
             if ( !r.success() )
@@ -395,6 +395,10 @@ namespace
 
             ReadResult rr( r.getObject(), meta );
             rr.setLastModifiedTime(timeStamp);
+
+            if (_debug)
+                OE_NOTICE << LC << "Read object \"" << key << "\" from cache bin [" << getID() << "] path=" << fileURI.full() << "." << OSG_EXT << std::endl;
+
             return rr;            
         }
     }
@@ -406,9 +410,16 @@ namespace
         if ( r.succeeded() )
         {
             if ( r.get<StringObject>() )
+            {
+                if (_debug)
+                    OE_NOTICE << LC << "Read string \"" << key << "\" from cache bin [" << getID() << "]" << std::endl;
+
                 return r;
+            }
             else
+            {
                 return ReadResult();
+            }
         }
         else
         {
@@ -423,14 +434,14 @@ namespace
             return false;
 
         // convert the key into a legal filename:
-        URI fileURI( getHashedKey(key), _metaPath );
+        URI fileURI( key, _metaPath );
         
         osgDB::ReaderWriter::WriteResult r;
 
         bool objWriteOK = false;
         {
             // prevent cache contention:
-            ScopedMutexLock lock(_mutex);
+            ScopedWriteLock lock(_mutex);
 
             // make a home for it..
             if ( !osgDB::fileExists( osgDB::getFilePath(fileURI.full()) ) )
@@ -467,7 +478,8 @@ namespace
 
         if ( objWriteOK )
         {
-            OE_DEBUG << LC << "Wrote \"" << key << "\" to cache bin [" << getID() << "] path=" << fileURI.full() << "." << OSG_EXT << std::endl;
+            if (_debug)
+                OE_NOTICE << LC << "Wrote \"" << key << "\" to cache bin [" << getID() << "] path=" << fileURI.full() << "." << OSG_EXT << std::endl;
         }
         else
         {
@@ -484,7 +496,7 @@ namespace
         if ( !binValidForReading() ) 
             return STATUS_NOT_FOUND;
 
-        URI fileURI( getHashedKey(key), _metaPath );
+        URI fileURI( key, _metaPath );
         std::string path( fileURI.full() + OSG_EXT );
         if ( !osgDB::fileExists(path) )
             return STATUS_NOT_FOUND;
@@ -496,10 +508,10 @@ namespace
     FileSystemCacheBin::remove(const std::string& key)
     {
         if ( !binValidForReading() ) return false;
-        URI fileURI( getHashedKey(key), _metaPath );
+        URI fileURI( key, _metaPath );
         std::string path( fileURI.full() + OSG_EXT );
 
-        ScopedMutexLock lock(_mutex);
+        ScopedWriteLock lock(_mutex);
         return ::unlink( path.c_str() ) == 0;
     }
 
@@ -507,10 +519,10 @@ namespace
     FileSystemCacheBin::touch(const std::string& key)
     {
         if ( !binValidForReading() ) return false;
-        URI fileURI( getHashedKey(key), _metaPath );
+        URI fileURI( key, _metaPath );
         std::string path( fileURI.full() + OSG_EXT );
 
-        ScopedMutexLock lock(_mutex);
+        ScopedWriteLock lock(_mutex);
         return osgEarth::touchFile( path );
     }
 
@@ -518,8 +530,6 @@ namespace
     FileSystemCacheBin::purgeDirectory( const std::string& dir )
     {
         if ( !binValidForReading() ) return false;
-
-        ScopedMutexLock lock(_mutex);
 
         bool allOK = true;
         osgDB::DirectoryContents dc = osgDB::getDirectoryContents( dir );
@@ -538,14 +548,16 @@ namespace
                     purgeDirectory( full );
 
                     ok = ::unlink( full.c_str() );
-                    OE_DEBUG << LC << "Unlink: " << full << std::endl;
+                    if (_debug)
+                        OE_NOTICE << LC << "Unlink: " << full << std::endl;
                 }
                 else if ( type == osgDB::REGULAR_FILE )
                 {
                     if ( full != _metaPath )
                     {
                         ok = ::unlink( full.c_str() );
-                        OE_DEBUG << LC << "Unlink: " << full << std::endl;
+                        if (_debug)
+                            OE_NOTICE << LC << "Unlink: " << full << std::endl;
                     }
                 }
 
@@ -563,7 +575,7 @@ namespace
         if ( !binValidForReading() )
             return false;
 
-        ScopedMutexLock lock(_mutex);
+        ScopedWriteLock lock(_mutex);
         std::string binDir = osgDB::getFilePath( _metaPath );
         return purgeDirectory( binDir );
     }
@@ -573,7 +585,7 @@ namespace
     {
         if ( !binValidForReading() ) return Config();
         
-        ScopedMutexLock lock(_mutex);
+        ScopedReadLock lock(_mutex);
 
         Config conf;
         conf.fromJSON( URI(_metaPath).getString(_zlibOptions.get()) );
@@ -586,7 +598,7 @@ namespace
     {
         if ( !binValidForWriting() ) return false;
         
-        ScopedMutexLock lock(_mutex);
+        ScopedWriteLock lock(_mutex);
 
         std::fstream output( _metaPath.c_str(), std::ios_base::out );
         if ( output.is_open() )
@@ -604,7 +616,7 @@ namespace
 
 /**
  * This driver defers loading of the source data to the appropriate OSG plugin. You
- * must explicity set an override profile when using this driver.
+ * must explicitly set an override profile when using this driver.
  *
  * For example, use this driver to load a simple jpeg file; then set the profile to
  * tell osgEarth its projection.

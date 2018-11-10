@@ -117,12 +117,16 @@ _debug    ( false )
 {
     if ( live )
     {
+// Disabling progress cancellation for mp engine.  This is causing issuses periodically with flat heightfields being generated and 
+// we haven't found an immediate fix for it yet.
+#if 0
         _progress = new MyProgressCallback();
         _progress->_frameOfLastCull = 0;
         _progress->_tiles = live;
         osgDB::Options* options = Registry::instance()->cloneOrCreateOptions();
         options->setUserData( _progress.get() );
         setDatabaseOptions( options );
+#endif
     }
 }
 
@@ -161,6 +165,12 @@ TilePagedLOD::getTileNode()
     return _children.size() > 0 ? static_cast<TileNode*>(_children[0].get()) : 0L;
 }
 
+const TileNode*
+TilePagedLOD::getTileNode() const
+{
+    return _children.size() > 0 ? static_cast<TileNode*>(_children[0].get()) : 0L;
+}
+
 void
 TilePagedLOD::setTileNode(TileNode* tilenode)
 {
@@ -190,6 +200,8 @@ TilePagedLOD::addChild(osg::Node* node)
             return true;
         }
 
+        bool value = osg::PagedLOD::addChild( node );
+
         // If it's a TileNode, this is the simple first addition of the 
         // static TileNode child (not from the pager).
         TileNode* tilenode = dynamic_cast<TileNode*>( node );
@@ -198,7 +210,7 @@ TilePagedLOD::addChild(osg::Node* node)
             _live->add( tilenode );
         }
 
-        return osg::PagedLOD::addChild( node );
+        return value;
     }
 
     return false;
@@ -437,3 +449,60 @@ TilePagedLOD::removeExpiredChildren(double         expiryTime,
     }
     return false;
 }
+
+const TileKey& TilePagedLOD::getKey() const
+{
+    if (!getTileNode())
+    {
+        return TileKey::INVALID;
+    }
+    return getTileNode()->getKey();
+}
+
+double TilePagedLOD::getMinimumExpirationTime() const
+{
+    return PagedLOD::getMinimumExpiryTime(1);    
+}
+
+void TilePagedLOD::setMinimumExpirationTime(double minExpiryTime)
+{
+    PagedLOD::setMinimumExpiryTime(1, minExpiryTime);
+}
+
+unsigned int TilePagedLOD::getMinimumExpirationFrames() const
+{
+    return PagedLOD::getMinimumExpiryFrames(1);    
+}
+
+void TilePagedLOD::setMinimumExpirationFrames(unsigned int minExpiryFrames)
+{
+    PagedLOD::setMinimumExpiryFrames(1, minExpiryFrames);
+}
+
+
+void TilePagedLOD::loadChildren()
+{
+    TileKey key = getKey();
+
+    // Load all filenames that aren't currently loaded in the PagedLOD
+
+    if (getNumChildren() < getNumFileNames())
+    {
+        for (unsigned int i = 0; i < getNumFileNames(); i++)
+        {
+            std::string filename = getFileName(i);    
+            if (!filename.empty() && i >= getNumChildren())
+            {
+                osg::ref_ptr< osg::Node > node = osgDB::readRefNodeFile(filename);
+                if (!node.valid())
+                {
+                    break;
+                }
+                addChild(node.get());
+            }
+        }
+    }
+}
+
+
+

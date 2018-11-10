@@ -18,21 +18,13 @@
  */
 
 #include <osgEarthUtil/TMS>
-#include <osgEarth/Common>
-#include <osgEarth/GeoData>
 #include <osgEarth/XmlUtils>
 #include <osgEarth/TileKey>
-#include <osgEarth/TileSource>
 #include <osgEarth/Registry>
-#include <osgEarth/StringUtils>
-#include <osgEarth/Profile>
 
-#include <osg/Notify>
 #include <osgDB/FileUtils>
 #include <osgDB/FileNameUtils>
 
-#include <limits.h>
-#include <iomanip>
 
 using namespace osgEarth;
 using namespace osgEarth::Util::TMS;
@@ -147,6 +139,8 @@ void TileMap::setExtents( double minX, double minY, double maxX, double maxY)
 #define ATTR_ORDER "order"
 #define ATTR_UNITSPERPIXEL "units-per-pixel"
 
+#define ATTR_DESCRIPTION "description"
+
 bool intersects(const double &minXa, const double &minYa, const double &maxXa, const double &maxYa,
                 const double &minXb, const double &minYb, const double &maxXb, const double &maxYb)
 {
@@ -223,8 +217,7 @@ TileMap::createProfile() const
     }
 
     else if ( 
-        spatialReference->isGeographic()  && 
-        !spatialReference->isPlateCarre() &&
+        spatialReference->isGeographic() &&
         osg::equivalent(_minX, -180.) &&
         osg::equivalent(_maxX,  180.) &&
         osg::equivalent(_minY,  -90.) &&
@@ -454,14 +447,15 @@ TileMap::create(const std::string& url,
 
 
 TileMap* 
-TileMapReaderWriter::read( const std::string& location, const osgDB::ReaderWriter::Options* options )
+TileMapReaderWriter::read( const URI& uri, const osgDB::Options* options )
 {
     TileMap* tileMap = NULL;
 
-    ReadResult r = URI(location).readString();
+    ReadResult r = uri.readString(options);
     if ( r.failed() )
     {
-        OE_DEBUG << LC << "Failed to read TMS tile map file from " << location << std::endl;
+        OE_DEBUG << LC << "Failed to read TMS tile map file from " << uri.full()
+            << " ... " << r.errorDetail() << std::endl;
         return 0L;
     }
     
@@ -475,7 +469,7 @@ TileMapReaderWriter::read( const std::string& location, const osgDB::ReaderWrite
 
     if (tileMap)
     {
-        tileMap->setFilename( location );
+        tileMap->setFilename( uri.full() );
 
         // record the timestamp (if there is one) in the tilemap. It's not a persistent field
         // but will help with things like per-session caching.
@@ -591,18 +585,32 @@ TileMapReaderWriter::read( const Config& conf )
 
             unsigned int maxLevel = conf.value<unsigned>(ATTR_MAX_LEVEL, 0);
 
+            std::string description = conf.value<std::string>(ATTR_DESCRIPTION, std::string());
+
             //OE_DEBUG << LC << "Read area " << minX << ", " << minY << ", " << maxX << ", " << maxY << ", minlevel=" << minLevel << " maxlevel=" << maxLevel << std::endl;
 
             if ( maxLevel > 0 )
-                tileMap->getDataExtents().push_back( DataExtent(GeoExtent(profile->getSRS(), minX, minY, maxX, maxY), 0, maxLevel));
+            {
+                if(description.empty())
+                    tileMap->getDataExtents().push_back( DataExtent(GeoExtent(profile->getSRS(), minX, minY, maxX, maxY), 0, maxLevel));
+                else
+                    tileMap->getDataExtents().push_back( DataExtent(GeoExtent(profile->getSRS(), minX, minY, maxX, maxY), 0, maxLevel, description));
+            }
             else
-                tileMap->getDataExtents().push_back( DataExtent(GeoExtent(profile->getSRS(), minX, minY, maxX, maxY), 0) );
+            {
+                if(description.empty())
+                    tileMap->getDataExtents().push_back( DataExtent(GeoExtent(profile->getSRS(), minX, minY, maxX, maxY), 0) );
+                else
+                    tileMap->getDataExtents().push_back( DataExtent(GeoExtent(profile->getSRS(), minX, minY, maxX, maxY), 0, description) );
+            }
         }
     }
 
 
     return tileMap;
 }
+
+#define DOUBLE_PRECISION 25
 
 static XmlDocument*
 tileMapToXmlDocument(const TileMap* tileMap)
@@ -621,15 +629,15 @@ tileMapToXmlDocument(const TileMap* tileMap)
     osg::ref_ptr<XmlElement> e_bounding_box = new XmlElement( ELEM_BOUNDINGBOX );
     double minX, minY, maxX, maxY;
     tileMap->getExtents( minX, minY, maxX, maxY );
-    e_bounding_box->getAttrs()[ATTR_MINX] = toString(minX);
-    e_bounding_box->getAttrs()[ATTR_MINY] = toString(minY);
-    e_bounding_box->getAttrs()[ATTR_MAXX] = toString(maxX);
-    e_bounding_box->getAttrs()[ATTR_MAXY] = toString(maxY);
+    e_bounding_box->getAttrs()[ATTR_MINX] = toString(minX, DOUBLE_PRECISION);
+    e_bounding_box->getAttrs()[ATTR_MINY] = toString(minY, DOUBLE_PRECISION);
+    e_bounding_box->getAttrs()[ATTR_MAXX] = toString(maxX, DOUBLE_PRECISION);
+    e_bounding_box->getAttrs()[ATTR_MAXY] = toString(maxY, DOUBLE_PRECISION);
     doc->getChildren().push_back(e_bounding_box.get() );
 
     osg::ref_ptr<XmlElement> e_origin = new XmlElement( ELEM_ORIGIN );
-    e_origin->getAttrs()[ATTR_X] = toString(tileMap->getOriginX());
-    e_origin->getAttrs()[ATTR_Y] = toString(tileMap->getOriginY());
+    e_origin->getAttrs()[ATTR_X] = toString(tileMap->getOriginX(), DOUBLE_PRECISION);
+    e_origin->getAttrs()[ATTR_Y] = toString(tileMap->getOriginY(), DOUBLE_PRECISION);
     doc->getChildren().push_back(e_origin.get());
 
     osg::ref_ptr<XmlElement> e_tile_format = new XmlElement( ELEM_TILE_FORMAT );
@@ -647,7 +655,7 @@ tileMapToXmlDocument(const TileMap* tileMap)
     {
         profileString = "global-geodetic";
     }
-    else if (profile->isEquivalentTo(osgEarth::Registry::instance()->getGlobalMercatorProfile()))
+    else if (profile->isEquivalentTo(osgEarth::Registry::instance()->getSphericalMercatorProfile()))
     {
         profileString = "global-mercator";
     }
@@ -663,7 +671,7 @@ tileMapToXmlDocument(const TileMap* tileMap)
         osg::ref_ptr<XmlElement> e_tile_set = new XmlElement( ELEM_TILESET );
         e_tile_set->getAttrs()[ATTR_HREF] = itr->getHref();
         e_tile_set->getAttrs()[ATTR_ORDER] = toString<unsigned int>(itr->getOrder());
-        e_tile_set->getAttrs()[ATTR_UNITSPERPIXEL] = toString(itr->getUnitsPerPixel());
+        e_tile_set->getAttrs()[ATTR_UNITSPERPIXEL] = toString(itr->getUnitsPerPixel(), DOUBLE_PRECISION);
         e_tile_sets->getChildren().push_back( e_tile_set.get() );
     }
     doc->getChildren().push_back(e_tile_sets.get());
@@ -675,14 +683,16 @@ tileMapToXmlDocument(const TileMap* tileMap)
         for (DataExtentList::const_iterator itr = tileMap->getDataExtents().begin(); itr != tileMap->getDataExtents().end(); ++itr)
         {
             osg::ref_ptr<XmlElement> e_data_extent = new XmlElement( ELEM_DATA_EXTENT );
-            e_data_extent->getAttrs()[ATTR_MINX] = toString(itr->xMin());
-            e_data_extent->getAttrs()[ATTR_MINY] = toString(itr->yMin());
-            e_data_extent->getAttrs()[ATTR_MAXX] = toString(itr->xMax());
-            e_data_extent->getAttrs()[ATTR_MAXY] = toString(itr->yMax());
+            e_data_extent->getAttrs()[ATTR_MINX] = toString(itr->xMin(), DOUBLE_PRECISION);
+            e_data_extent->getAttrs()[ATTR_MINY] = toString(itr->yMin(), DOUBLE_PRECISION);
+            e_data_extent->getAttrs()[ATTR_MAXX] = toString(itr->xMax(), DOUBLE_PRECISION);
+            e_data_extent->getAttrs()[ATTR_MAXY] = toString(itr->yMax(), DOUBLE_PRECISION);
             if ( itr->minLevel().isSet() )
                 e_data_extent->getAttrs()[ATTR_MIN_LEVEL] = toString<unsigned int>(*itr->minLevel());
             if ( itr->maxLevel().isSet() )
                 e_data_extent->getAttrs()[ATTR_MAX_LEVEL] = toString<unsigned int>(*itr->maxLevel());
+            if ( itr->description().isSet() )
+                e_data_extent->getAttrs()[ATTR_DESCRIPTION] = *itr->description();
             e_data_extents->getChildren().push_back( e_data_extent );
         }
         doc->getChildren().push_back( e_data_extents.get() );

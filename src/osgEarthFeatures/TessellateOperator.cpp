@@ -45,6 +45,9 @@ TessellateOperator::tessellateGeo( const osg::Vec3d& p0, const osg::Vec3d& p1, u
 
     out.push_back( p0 );
 
+    GeoPoint beg(SpatialReference::get("wgs84"), p0);
+    GeoPoint end(SpatialReference::get("wgs84"), p1);
+
     for( unsigned i=1; i<parts; ++i )
     {
         double t = step*double(i);
@@ -52,13 +55,8 @@ TessellateOperator::tessellateGeo( const osg::Vec3d& p0, const osg::Vec3d& p1, u
 
         if ( interp == GEOINTERP_GREAT_CIRCLE )
         {
-            double lat, lon;
-            GeoMath::interpolate(
-                osg::DegreesToRadians(p0.y()), osg::DegreesToRadians(p0.x()),
-                osg::DegreesToRadians(p1.y()), osg::DegreesToRadians(p1.x()),
-                t,
-                lat, lon );
-            p.set( osg::RadiansToDegrees(lon), osg::RadiansToDegrees(lat), p0.z() + t*zdelta );
+            GeoPoint r = beg.interpolate(end, t);
+            p = r.vec3d();
         }
         else // GEOINTERP_RHUMB_LINE
         {
@@ -101,17 +99,15 @@ TessellateOperator::operator()( Feature* feature, FilterContext& context ) const
     }
 
     Units featureUnits = feature->getSRS() ? feature->getSRS()->getUnits() : Units::METERS;
-    bool isGeo = feature->getSRS() ? feature->getSRS()->isGeographic() : true;
-    GeoInterpolation interp = feature->geoInterp().isSet() ? *feature->geoInterp() : _defaultInterp;
+    bool isGeo = feature->getSRS() ? feature->getSRS()->isGeographic() : false;
+    GeoInterpolation geoInterp = feature->geoInterp().isSet() ? *feature->geoInterp() : _defaultInterp;
 
     double sliceSize = 0.0;
     int    numPartitions = _numPartitions;
 
     if ( _maxDistance.isSet() )
     {
-        // copmpute the slice size in feature units.
-        double latitude = feature->getGeometry()->getBounds().center().y();
-        sliceSize = SpatialReference::transformUnits( _maxDistance.value(), feature->getSRS(), latitude );
+        sliceSize = _maxDistance->as(Units::METERS);
     }
 
     GeometryIterator i( feature->getGeometry(), true );
@@ -131,10 +127,13 @@ TessellateOperator::operator()( Feature* feature, FilterContext& context ) const
             {
                 // calculate slice count
                 if ( sliceSize > 0.0 )
-                    slices = std::max( 1u, (unsigned)((*v - *(v+1)).length() / sliceSize) );
+                {
+                    double dist = GeoMath::distance(*v, *(v + 1), feature->getSRS());
+                    slices = osg::maximum( 1u, (unsigned)(dist / sliceSize) );
+                }
 
                 if ( isGeo )
-                    tessellateGeo( *v, *(v+1), slices, interp, newVerts );
+                    tessellateGeo( *v, *(v+1), slices, geoInterp, newVerts );
                 else
                     tessellateLinear( *v, *(v+1), slices, newVerts );
             }
@@ -142,10 +141,13 @@ TessellateOperator::operator()( Feature* feature, FilterContext& context ) const
             {
                 // calculate slice count
                 if ( sliceSize > 0.0 )
-                    slices = std::max( 1u, (unsigned)((*v - *g->begin()).length() / sliceSize) );
+                {
+                    double dist = GeoMath::distance(*v, *g->begin(), feature->getSRS());
+                    slices = osg::maximum( 1u, (unsigned)(dist / sliceSize) );
+                }
 
                 if ( isGeo )
-                    tessellateGeo( *v, *g->begin(), slices, interp, newVerts );
+                    tessellateGeo( *v, *g->begin(), slices, geoInterp, newVerts );
                 else
                     tessellateLinear( *v, *g->begin(), slices, newVerts );
             }
@@ -158,4 +160,13 @@ TessellateOperator::operator()( Feature* feature, FilterContext& context ) const
 
         g->swap( newVerts );
     }
+}
+
+FilterContext
+TessellateOperator::push(FeatureList& input, FilterContext& context) const
+{
+    for (FeatureList::iterator i = input.begin(); i != input.end(); ++i) {
+        operator()(i->get(), context);
+    }
+    return context;
 }

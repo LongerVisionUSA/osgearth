@@ -1,4 +1,5 @@
 #version $GLSL_VERSION_STR
+$GLSL_DEFAULT_PRECISION_FLOAT
 
 #pragma vp_location fragment_coloring
 
@@ -6,7 +7,7 @@
 // and rendering artifacts when the camera is very close to the ground.
 #define LOD_COUNT 26
 
-const float oe_SplatRanges[LOD_COUNT] = float[](
+const float oe_SplatRanges[26] = float[](
        100000000.0, // 0
         75000000.0, // 1
         50000000.0, // 2

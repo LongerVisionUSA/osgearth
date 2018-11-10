@@ -65,11 +65,11 @@ namespace osgEarth { namespace Detail
     public:
         Config getConfig() const {
             Config conf = DriverConfigOptions::getConfig();
-            conf.updateIfSet("image", _imageURI);
-            conf.updateIfSet("lod", _lod);
-            conf.updateIfSet("alpha", _alpha);
-            conf.updateIfSet("max_range", _maxRange);
-            conf.updateIfSet("attenuation", _attenDist);
+            conf.set("image", _imageURI);
+            conf.set("lod", _lod);
+            conf.set("alpha", _alpha);
+            conf.set("max_range", _maxRange);
+            conf.set("attenuation", _attenDist);
             return conf;
         }
 
@@ -81,11 +81,11 @@ namespace osgEarth { namespace Detail
 
     private:
         void fromConfig( const Config& conf ) {
-            conf.getIfSet( "image", _imageURI );
-            conf.getIfSet( "lod", _lod );
-            conf.getIfSet( "alpha", _alpha );
-            conf.getIfSet( "max_range", _maxRange );
-            conf.getIfSet( "attenuation", _attenDist);
+            conf.get( "image", _imageURI );
+            conf.get( "lod", _lod );
+            conf.get( "alpha", _alpha );
+            conf.get( "max_range", _maxRange );
+            conf.get( "attenuation", _attenDist);
         }
 
         optional<URI> _imageURI;

@@ -26,7 +26,7 @@
 #include <osgEarth/Capabilities>
 #include <osgEarth/TerrainEngineNode>
 #include <osgEarth/ImageUtils>
-#include <osgEarthUtil/SimplexNoise>
+#include <osgEarth/SimplexNoise>
 
 #define LC "[Detail] "
 
@@ -79,6 +79,7 @@ DetailTerrainEffect::onInstall(TerrainEngineNode* engine)
 
             // configure shaders
             VirtualProgram* vp = VirtualProgram::getOrCreate(stateset);
+            vp->setName("DetailTerrainEffect");
 
             Shaders package;            
 

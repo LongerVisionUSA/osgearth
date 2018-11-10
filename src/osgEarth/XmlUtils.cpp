@@ -18,13 +18,8 @@
  */
 
 #include <osgEarth/XmlUtils>
-#include <osgEarth/StringUtils>
-#include <osg/Notify>
 
 #include "tinyxml.h"
-#include <algorithm>
-#include <sstream>
-#include <iomanip>
 
 
 using namespace osgEarth;
@@ -61,7 +56,8 @@ XmlElement::XmlElement( const Config& conf )
 
         if ( !conf.value().empty() )
         {
-            children.push_back( new XmlText(conf.value()) );
+            XmlText* xt = new XmlText(conf.value());
+            children.push_back( xt );
         }
 
         for( ConfigSet::const_iterator j = conf.children().begin(); j != conf.children().end(); j++ )
@@ -226,16 +222,6 @@ void
 XmlElement::addSubElement(const std::string& tag, const std::string& text)
 {
     XmlElement* ele = new XmlElement(tag);
-    ele->getChildren().push_back(new XmlText(text));
-    children.push_back(ele);
-}
-
-void
-XmlElement::addSubElement(const std::string& tag, const Properties& attrs, const std::string& text)
-{
-    XmlElement* ele = new XmlElement(tag);
-    for( Properties::const_iterator i = attrs.begin(); i != attrs.end(); i++ )
-        ele->attrs[i->first] = i->second;
     ele->getChildren().push_back(new XmlText(text));
     children.push_back(ele);
 }
@@ -513,7 +499,22 @@ storeNode( const XmlNode* node, TiXmlNode* parent)
     else if (node->isText())
     {
         XmlText* t = (XmlText*)node;
-        parent->LinkEndChild( new TiXmlText( t->getValue().c_str() ) );
+        std::string value = t->getValue();
+
+        std::string encodedValue;
+		TiXmlBase::EncodeString(value, &encodedValue);
+        bool needCDATA = !encodedValue.empty() && encodedValue != value;
+
+        TiXmlText* tNode = new TiXmlText(value.c_str());
+        if (needCDATA)
+        {
+            // XML should be normalized to LF (no CRLF)
+            value = osgEarth::replaceIn(value, "\r\n", "\n");
+            tNode->SetValue(value.c_str());
+            tNode->SetCDATA(true);
+        }
+
+        parent->LinkEndChild(tNode);
     }
 }
 

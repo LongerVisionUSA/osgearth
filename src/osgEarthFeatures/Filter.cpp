@@ -17,14 +17,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 #include <osgEarthFeatures/Filter>
+#include <osgEarthFeatures/FilterContext>
 #include <osgEarthSymbology/LineSymbol>
 #include <osgEarthSymbology/PointSymbol>
 #include <osgEarth/ECEF>
 #include <osgEarth/Registry>
+#include <osgEarth/GLUtils>
 #include <osg/MatrixTransform>
-#include <osg/Point>
-#include <osg/LineWidth>
-#include <osg/LineStipple>
 #include <osgEarth/VirtualProgram>
 
 using namespace osgEarth;
@@ -103,7 +102,8 @@ FeatureFilterRegistry::create(const Config& conf, const osgDB::Options* dbo)
         dbopt->setPluginData( FEATURE_FILTER_OPTIONS_TAG, (void*)&options );
 
         std::string driverExt = std::string( ".osgearth_featurefilter_" ) + driver;
-        result = dynamic_cast<FeatureFilter*>( osgDB::readObjectFile( driverExt, dbopt.get() ) );
+        osg::ref_ptr<osg::Object> object = osgDB::readRefObjectFile( driverExt, dbopt.get() );
+        result = dynamic_cast<FeatureFilter*>( object.release() );
     }
 
     if ( !result.valid() )
@@ -143,16 +143,19 @@ FeaturesToNodeFilter::computeLocalizers( const FilterContext& context, const osg
 {
     if ( context.isGeoreferenced() )
     {
-        if ( context.getSession()->getMapInfo().isGeocentric() )
+        bool ecef = context.getOutputSRS()->isGeographic();
+
+        if (ecef)
         {
-            const SpatialReference* geogSRS = context.profile()->getSRS()->getGeographicSRS();
+
+            const SpatialReference* geogSRS = context.getOutputSRS()->getGeographicSRS();
             GeoExtent geodExtent = extent.transform( geogSRS );
             if ( geodExtent.width() < 180.0 )
             {
                 osg::Vec3d centroid, centroidECEF;
                 geodExtent.getCentroid( centroid.x(), centroid.y() );
-                geogSRS->transform( centroid, geogSRS->getECEF(), centroidECEF );
-                geogSRS->getECEF()->createLocalToWorld( centroidECEF, out_l2w );
+                geogSRS->transform( centroid, geogSRS->getGeocentricSRS(), centroidECEF );
+                geogSRS->getGeocentricSRS()->createLocalToWorld( centroidECEF, out_l2w );
                 out_w2l.invert( out_l2w );
             }
         }
@@ -326,40 +329,13 @@ FeaturesToNodeFilter::createDelocalizeGroup( const osg::Matrixd &local2world ) c
     return group;
 }
 
-
-void 
-FeaturesToNodeFilter::applyLineSymbology(osg::StateSet*    stateset, 
-                                         const LineSymbol* line)
-{
-    if ( line && line->stroke().isSet() )
-    {
-        if ( line->stroke()->width().isSet() )
-        {
-            float width = std::max( 1.0f, *line->stroke()->width() );
-            if ( width != 1.0f )
-            {
-                stateset->setAttributeAndModes(new osg::LineWidth(width), 1);
-            }
-        }
-
-        if ( line->stroke()->stipplePattern().isSet() )
-        {
-            stateset->setAttributeAndModes(
-                new osg::LineStipple(
-                    line->stroke()->stippleFactor().value(),
-                    line->stroke()->stipplePattern().value()),
-                osg::StateAttribute::ON );
-        }
-    }
-}
-
 void 
 FeaturesToNodeFilter::applyPointSymbology(osg::StateSet*     stateset, 
                                           const PointSymbol* point)
 {
     if ( point )
     {
-        float size = std::max( 0.1f, *point->size() );
-        stateset->setAttributeAndModes(new osg::Point(size), 1);
+        float size = osg::maximum( 0.1f, *point->size() );
+        GLUtils::setPointSize(stateset, size, 1);
     }
 }

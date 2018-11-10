@@ -1,24 +1,28 @@
 #version $GLSL_VERSION_STR
+$GLSL_DEFAULT_PRECISION_FLOAT
 
-#pragma vp_entryPoint oe_graticule_fragment
+#pragma vp_entryPoint oe_GeodeticGraticule_fragment
 #pragma vp_location   fragment_lighting
 #pragma vp_order      1.1
 
-uniform float oe_graticule_lineWidth;
-uniform float oe_graticule_resolution;
-uniform vec4  oe_graticule_color;
+#pragma import_defines(OE_DISABLE_GRATICULE)
+
+uniform float oe_GeodeticGraticule_lineWidth;
+uniform float oe_GeodeticGraticule_resolution;
+uniform vec4  oe_GeodeticGraticule_color;
 uniform mat4 osg_ViewMatrixInverse;
 
-in vec2 oe_graticule_coord;
+in vec2 oe_GeodeticGraticule_coord;
 
-void oe_graticule_fragment(inout vec4 color)
+void oe_GeodeticGraticule_fragment(inout vec4 color)
 {
+#ifndef OE_DISABLE_GRATICULE
     // double the effective res for longitude since it has twice the span
-    vec2 gr = vec2(0.5*oe_graticule_resolution, oe_graticule_resolution);
-    vec2 distanceToLine = mod(oe_graticule_coord, gr);
-    vec2 dx = abs(dFdx(oe_graticule_coord));
-    vec2 dy = abs(dFdy(oe_graticule_coord));
-    vec2 dF = vec2(max(dx.s, dy.s), max(dx.t, dy.t)) * oe_graticule_lineWidth;
+    vec2 gr = vec2(0.5*oe_GeodeticGraticule_resolution, oe_GeodeticGraticule_resolution);
+    vec2 distanceToLine = mod(oe_GeodeticGraticule_coord, gr);
+    vec2 dx = abs(dFdx(oe_GeodeticGraticule_coord));
+    vec2 dy = abs(dFdy(oe_GeodeticGraticule_coord));
+    vec2 dF = vec2(max(dx.s, dy.s), max(dx.t, dy.t)) * oe_GeodeticGraticule_lineWidth;
 
     if ( any(lessThan(distanceToLine, dF)))
     {
@@ -31,6 +35,7 @@ void oe_graticule_fragment(inout vec4 color)
         float hae = length(eye) - 6378137.0;
         float maxHAE = 2000.0;
         float alpha = clamp(hae / maxHAE, 0.0, 1.0) * antialias;
-        color.rgb = mix(color.rgb, oe_graticule_color.rgb, oe_graticule_color.a * alpha);
+        color.rgb = mix(color.rgb, oe_GeodeticGraticule_color.rgb, oe_GeodeticGraticule_color.a * alpha);
     }
+#endif
 }

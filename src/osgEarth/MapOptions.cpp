@@ -23,10 +23,10 @@ using namespace osgEarth;
 void
 MapOptions::fromConfig( const Config& conf )
 {
-    conf.getIfSet   ( "name",         _name );
-    conf.getObjIfSet( "profile",      _profileOptions );
-    conf.getObjIfSet( "cache",        _cacheOptions );  
-    conf.getObjIfSet( "cache_policy", _cachePolicy );
+    conf.get( "name",         _name );
+    conf.get( "profile",      _profileOptions );
+    conf.get( "cache",        _cacheOptions );  
+    conf.get( "cache_policy", _cachePolicy );
 
     // legacy support:
     if ( conf.value<bool>( "cache_only", false ) == true )
@@ -35,38 +35,36 @@ MapOptions::fromConfig( const Config& conf )
         _cachePolicy->usage() = CachePolicy::USAGE_NO_CACHE;
 
     // all variations:
-    conf.getIfSet( "type", "geocentric", _cstype, CSTYPE_GEOCENTRIC );
-    conf.getIfSet( "type", "globe",      _cstype, CSTYPE_GEOCENTRIC );
-    conf.getIfSet( "type", "round",      _cstype, CSTYPE_GEOCENTRIC );
-    conf.getIfSet( "type", "projected",  _cstype, CSTYPE_PROJECTED );
-    conf.getIfSet( "type", "flat",       _cstype, CSTYPE_PROJECTED );
-    conf.getIfSet( "type", "cube",       _cstype, CSTYPE_GEOCENTRIC_CUBE );
+    conf.get( "type", "geocentric", _cstype, CSTYPE_GEOCENTRIC );
+    conf.get( "type", "globe",      _cstype, CSTYPE_GEOCENTRIC );
+    conf.get( "type", "round",      _cstype, CSTYPE_GEOCENTRIC );
+    conf.get( "type", "projected",  _cstype, CSTYPE_PROJECTED );
+    conf.get( "type", "flat",       _cstype, CSTYPE_PROJECTED );
 
-    conf.getIfSet( "elevation_interpolation", "nearest",     _elevationInterpolation, INTERP_NEAREST);
-    conf.getIfSet( "elevation_interpolation", "average",     _elevationInterpolation, INTERP_AVERAGE);
-    conf.getIfSet( "elevation_interpolation", "bilinear",    _elevationInterpolation, INTERP_BILINEAR);
-    conf.getIfSet( "elevation_interpolation", "triangulate", _elevationInterpolation, INTERP_TRIANGULATE);
+    conf.get( "elevation_interpolation", "nearest",     _elevationInterpolation, INTERP_NEAREST);
+    conf.get( "elevation_interpolation", "average",     _elevationInterpolation, INTERP_AVERAGE);
+    conf.get( "elevation_interpolation", "bilinear",    _elevationInterpolation, INTERP_BILINEAR);
+    conf.get( "elevation_interpolation", "triangulate", _elevationInterpolation, INTERP_TRIANGULATE);
 }
 
 Config
 MapOptions::getConfig() const
 {
-    Config conf = ConfigOptions::newConfig();
+    Config conf = ConfigOptions::getConfig();
 
-    conf.updateIfSet   ( "name",         _name );
-    conf.updateObjIfSet( "profile",      _profileOptions );
-    conf.updateObjIfSet( "cache",        _cacheOptions );
-    conf.updateObjIfSet( "cache_policy", _cachePolicy );
+    conf.set( "name",         _name );
+    conf.set( "profile",      _profileOptions );
+    conf.set( "cache",        _cacheOptions );
+    conf.set( "cache_policy", _cachePolicy );
 
     // all variations:
-    conf.updateIfSet( "type", "geocentric", _cstype, CSTYPE_GEOCENTRIC );
-    conf.updateIfSet( "type", "projected",  _cstype, CSTYPE_PROJECTED );
-    conf.updateIfSet( "type", "cube",       _cstype, CSTYPE_GEOCENTRIC_CUBE );
+    conf.set( "type", "geocentric", _cstype, CSTYPE_GEOCENTRIC );
+    conf.set( "type", "projected",  _cstype, CSTYPE_PROJECTED );
 
-    conf.updateIfSet( "elevation_interpolation", "nearest",     _elevationInterpolation, INTERP_NEAREST);
-    conf.updateIfSet( "elevation_interpolation", "average",     _elevationInterpolation, INTERP_AVERAGE);
-    conf.updateIfSet( "elevation_interpolation", "bilinear",    _elevationInterpolation, INTERP_BILINEAR);
-    conf.updateIfSet( "elevation_interpolation", "triangulate", _elevationInterpolation, INTERP_TRIANGULATE);
+    conf.set( "elevation_interpolation", "nearest",     _elevationInterpolation, INTERP_NEAREST);
+    conf.set( "elevation_interpolation", "average",     _elevationInterpolation, INTERP_AVERAGE);
+    conf.set( "elevation_interpolation", "bilinear",    _elevationInterpolation, INTERP_BILINEAR);
+    conf.set( "elevation_interpolation", "triangulate", _elevationInterpolation, INTERP_TRIANGULATE);
 
     return conf;
 }

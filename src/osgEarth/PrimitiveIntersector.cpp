@@ -18,11 +18,7 @@
  */
 
 #include <osgEarth/PrimitiveIntersector>
-#include <osgEarth/StringUtils>
 #include <osgEarth/Utils>
-#include <osg/Geode>
-#include <osg/KdTree>
-#include <osg/Notify>
 #include <osg/TemplatePrimitiveFunctor>
 
 #define LC "[PrmitiveIntersector] "
@@ -445,9 +441,9 @@ void PrimitiveIntersector::leave()
 
 void PrimitiveIntersector::intersect(osgUtil::IntersectionVisitor& iv, osg::Drawable* drawable)
 {
-    if (reachedLimit()) return;
+    if (reachedLimit() || !drawable) return;
 
-    osg::BoundingBox bb = Utils::getBoundingBox(drawable);
+    osg::BoundingBox bb = drawable->getBoundingBox();
 
     if (bb.valid())
         bb.expandBy(osg::BoundingSphere(bb.center(), (_thickness - _start).length()));

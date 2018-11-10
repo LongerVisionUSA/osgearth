@@ -38,7 +38,6 @@ _font(rhs._font),
 _size(rhs._size),
 _content(rhs._content),
 _priority(rhs._priority),
-_removeDuplicateLabels(rhs._removeDuplicateLabels),
 _pixelOffset(rhs._pixelOffset),
 _onScreenRotation(rhs._onScreenRotation),
 _geographicCourse(rhs._geographicCourse),
@@ -60,7 +59,6 @@ _haloOffset           ( 0.0625f ),
 _haloBackdropType     ( osgText::Text::OUTLINE ),
 _haloImplementation   ( osgText::Text::DELAYED_DEPTH_WRITES ),
 _size                 ( 16.0f ),
-_removeDuplicateLabels( false ),
 _alignment            ( ALIGN_BASE_LINE ),
 _layout               ( LAYOUT_LEFT_TO_RIGHT ),
 _provider             ( "annotation" ),
@@ -79,69 +77,68 @@ TextSymbol::getConfig() const
 {
     Config conf = Symbol::getConfig();
     conf.key() = "text";
-    conf.addObjIfSet( "fill", _fill );
-    conf.addObjIfSet( "halo", _halo );
-    conf.addIfSet( "halo_offset", _haloOffset );
-    conf.addIfSet( "halo_backdrop_type", "bottom_right",  _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_RIGHT );
-    conf.addIfSet( "halo_backdrop_type", "center_right",  _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_RIGHT );
-    conf.addIfSet( "halo_backdrop_type", "top_right",     _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_RIGHT );
-    conf.addIfSet( "halo_backdrop_type", "bottom_center", _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_CENTER );
-    conf.addIfSet( "halo_backdrop_type", "top_center",    _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_CENTER );
-    conf.addIfSet( "halo_backdrop_type", "bottom_left",   _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_LEFT );
-    conf.addIfSet( "halo_backdrop_type", "center_left",   _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_LEFT );
-    conf.addIfSet( "halo_backdrop_type", "top_left",      _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_LEFT );
-    conf.addIfSet( "halo_backdrop_type", "outline",       _haloBackdropType, osgText::Text::OUTLINE );
-    conf.addIfSet( "halo_backdrop_type", "none",          _haloBackdropType, osgText::Text::NONE );
-    conf.addIfSet( "halo_implementation", "polygon_offset",       _haloImplementation, osgText::Text::POLYGON_OFFSET );
-    conf.addIfSet( "halo_implementation", "no_depth_buffer",      _haloImplementation, osgText::Text::NO_DEPTH_BUFFER );
-    conf.addIfSet( "halo_implementation", "depth_range",          _haloImplementation, osgText::Text::DEPTH_RANGE );
-    conf.addIfSet( "halo_implementation", "stencil_buffer",       _haloImplementation, osgText::Text::STENCIL_BUFFER );
-    conf.addIfSet( "halo_implementation", "delayed_depth_writes", _haloImplementation, osgText::Text::DELAYED_DEPTH_WRITES );
-    conf.addIfSet( "font", _font );
-    conf.addObjIfSet( "size", _size );
-    conf.addObjIfSet( "content", _content );
-    conf.addObjIfSet( "priority", _priority );
-    conf.addIfSet( "remove_duplicate_labels", _removeDuplicateLabels );
+    conf.set( "fill", _fill );
+    conf.set( "halo", _halo );
+    conf.set( "halo_offset", _haloOffset );
+    conf.set( "halo_backdrop_type", "bottom_right",  _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_RIGHT );
+    conf.set( "halo_backdrop_type", "center_right",  _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_RIGHT );
+    conf.set( "halo_backdrop_type", "top_right",     _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_RIGHT );
+    conf.set( "halo_backdrop_type", "bottom_center", _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_CENTER );
+    conf.set( "halo_backdrop_type", "top_center",    _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_CENTER );
+    conf.set( "halo_backdrop_type", "bottom_left",   _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_LEFT );
+    conf.set( "halo_backdrop_type", "center_left",   _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_LEFT );
+    conf.set( "halo_backdrop_type", "top_left",      _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_LEFT );
+    conf.set( "halo_backdrop_type", "outline",       _haloBackdropType, osgText::Text::OUTLINE );
+    conf.set( "halo_backdrop_type", "none",          _haloBackdropType, osgText::Text::NONE );
+    conf.set( "halo_implementation", "polygon_offset",       _haloImplementation, osgText::Text::POLYGON_OFFSET );
+    conf.set( "halo_implementation", "no_depth_buffer",      _haloImplementation, osgText::Text::NO_DEPTH_BUFFER );
+    conf.set( "halo_implementation", "depth_range",          _haloImplementation, osgText::Text::DEPTH_RANGE );
+    conf.set( "halo_implementation", "stencil_buffer",       _haloImplementation, osgText::Text::STENCIL_BUFFER );
+    conf.set( "halo_implementation", "delayed_depth_writes", _haloImplementation, osgText::Text::DELAYED_DEPTH_WRITES );
+    conf.set( "font", _font );
+    conf.set( "size", _size );
+    conf.set( "content", _content );
+    conf.set( "priority", _priority );
 
-    conf.addIfSet( "encoding", "ascii", _encoding, ENCODING_ASCII );
-    conf.addIfSet( "encoding", "utf8",  _encoding, ENCODING_UTF8 );
-    conf.addIfSet( "encoding", "utf16", _encoding, ENCODING_UTF16 );
-    conf.addIfSet( "encoding", "utf32", _encoding, ENCODING_UTF32 );
+    conf.set( "encoding", "ascii", _encoding, ENCODING_ASCII );
+    conf.set( "encoding", "utf8",  _encoding, ENCODING_UTF8 );
+    conf.set( "encoding", "utf16", _encoding, ENCODING_UTF16 );
+    conf.set( "encoding", "utf32", _encoding, ENCODING_UTF32 );
 
-    conf.addIfSet( "alignment", "left_top",                _alignment, ALIGN_LEFT_TOP );
-    conf.addIfSet( "alignment", "left_center",             _alignment, ALIGN_LEFT_CENTER );
-    conf.addIfSet( "alignment", "left_bottom",             _alignment, ALIGN_LEFT_BOTTOM );
-    conf.addIfSet( "alignment", "center_top",              _alignment, ALIGN_CENTER_TOP );
-    conf.addIfSet( "alignment", "center_center",           _alignment, ALIGN_CENTER_CENTER );
-    conf.addIfSet( "alignment", "center_bottom",           _alignment, ALIGN_CENTER_BOTTOM );
-    conf.addIfSet( "alignment", "right_top",               _alignment, ALIGN_RIGHT_TOP );
-    conf.addIfSet( "alignment", "right_center",            _alignment, ALIGN_RIGHT_CENTER );
-    conf.addIfSet( "alignment", "right_bottom",            _alignment, ALIGN_RIGHT_BOTTOM );
-    conf.addIfSet( "alignment", "left_base_line",          _alignment, ALIGN_LEFT_BASE_LINE );
-    conf.addIfSet( "alignment", "center_base_line",        _alignment, ALIGN_CENTER_BASE_LINE );
-    conf.addIfSet( "alignment", "right_base_line",         _alignment, ALIGN_RIGHT_BASE_LINE );
-    conf.addIfSet( "alignment", "left_bottom_base_line",   _alignment, ALIGN_LEFT_BOTTOM_BASE_LINE );
-    conf.addIfSet( "alignment", "center_bottom_base_line", _alignment, ALIGN_CENTER_BOTTOM_BASE_LINE );
-    conf.addIfSet( "alignment", "right_bottom_base_line",  _alignment, ALIGN_RIGHT_BOTTOM_BASE_LINE );
-    conf.addIfSet( "alignment", "base_line",               _alignment, ALIGN_BASE_LINE );
+    conf.set( "alignment", "left_top",                _alignment, ALIGN_LEFT_TOP );
+    conf.set( "alignment", "left_center",             _alignment, ALIGN_LEFT_CENTER );
+    conf.set( "alignment", "left_bottom",             _alignment, ALIGN_LEFT_BOTTOM );
+    conf.set( "alignment", "center_top",              _alignment, ALIGN_CENTER_TOP );
+    conf.set( "alignment", "center_center",           _alignment, ALIGN_CENTER_CENTER );
+    conf.set( "alignment", "center_bottom",           _alignment, ALIGN_CENTER_BOTTOM );
+    conf.set( "alignment", "right_top",               _alignment, ALIGN_RIGHT_TOP );
+    conf.set( "alignment", "right_center",            _alignment, ALIGN_RIGHT_CENTER );
+    conf.set( "alignment", "right_bottom",            _alignment, ALIGN_RIGHT_BOTTOM );
+    conf.set( "alignment", "left_base_line",          _alignment, ALIGN_LEFT_BASE_LINE );
+    conf.set( "alignment", "center_base_line",        _alignment, ALIGN_CENTER_BASE_LINE );
+    conf.set( "alignment", "right_base_line",         _alignment, ALIGN_RIGHT_BASE_LINE );
+    conf.set( "alignment", "left_bottom_base_line",   _alignment, ALIGN_LEFT_BOTTOM_BASE_LINE );
+    conf.set( "alignment", "center_bottom_base_line", _alignment, ALIGN_CENTER_BOTTOM_BASE_LINE );
+    conf.set( "alignment", "right_bottom_base_line",  _alignment, ALIGN_RIGHT_BOTTOM_BASE_LINE );
+    conf.set( "alignment", "base_line",               _alignment, ALIGN_BASE_LINE );
 
-    conf.addIfSet( "layout", "ltr",  _layout, LAYOUT_LEFT_TO_RIGHT );
-    conf.addIfSet( "layout", "rtl",  _layout, LAYOUT_RIGHT_TO_LEFT );
-    conf.addIfSet( "layout", "vertical",  _layout, LAYOUT_VERTICAL );
+    conf.set( "layout", "ltr",  _layout, LAYOUT_LEFT_TO_RIGHT );
+    conf.set( "layout", "rtl",  _layout, LAYOUT_RIGHT_TO_LEFT );
+    conf.set( "layout", "vertical",  _layout, LAYOUT_VERTICAL );
 
-    conf.addIfSet( "declutter", _declutter );
+    conf.set( "declutter", _declutter );
 
-    conf.addIfSet( "provider", _provider );
+    conf.set( "provider", _provider );
     if ( _pixelOffset.isSet() ) {
-        conf.add( "pixel_offset_x", toString(_pixelOffset->x()) );
-        conf.add( "pixel_offset_y", toString(_pixelOffset->y()) );
+        conf.set( "pixel_offset_x", toString(_pixelOffset->x()) );
+        conf.set( "pixel_offset_y", toString(_pixelOffset->y()) );
     }
 
-    conf.addObjIfSet( "rotation", _onScreenRotation );
-    conf.addObjIfSet( "geographic-course", _geographicCourse );
+    conf.set( "rotation", _onScreenRotation );
+    conf.set( "geographic-course", _geographicCourse );
 
-    conf.addIfSet( "text-occlusion-cull", _occlusionCull );
-    conf.addIfSet( "text-occlusion-cull-altitude", _occlusionCullAltitude );
+    conf.set( "text-occlusion-cull", _occlusionCull );
+    conf.set( "text-occlusion-cull-altitude", _occlusionCullAltitude );
 
     return conf;
 }
@@ -149,69 +146,68 @@ TextSymbol::getConfig() const
 void
 TextSymbol::mergeConfig( const Config& conf )
 {
-    conf.getObjIfSet( "fill", _fill );
-    conf.getObjIfSet( "halo", _halo );
-    conf.getIfSet( "halo_offset", _haloOffset );
-    conf.getIfSet( "halo_backdrop_type", "right_bottom",  _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_RIGHT );
-    conf.getIfSet( "halo_backdrop_type", "right_center",  _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_RIGHT );
-    conf.getIfSet( "halo_backdrop_type", "right_top",     _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_RIGHT );
-    conf.getIfSet( "halo_backdrop_type", "center_bottom", _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_CENTER );
-    conf.getIfSet( "halo_backdrop_type", "center_top",    _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_CENTER );
-    conf.getIfSet( "halo_backdrop_type", "left_bottom",   _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_LEFT );
-    conf.getIfSet( "halo_backdrop_type", "left_center",   _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_LEFT );
-    conf.getIfSet( "halo_backdrop_type", "left_top",      _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_LEFT );
-    conf.getIfSet( "halo_backdrop_type", "outline",       _haloBackdropType, osgText::Text::OUTLINE );
-    conf.getIfSet( "halo_backdrop_type", "none",          _haloBackdropType, osgText::Text::NONE );
-    conf.getIfSet( "halo_implementation", "polygon_offset",       _haloImplementation, osgText::Text::POLYGON_OFFSET );
-    conf.getIfSet( "halo_implementation", "no_depth_buffer",      _haloImplementation, osgText::Text::NO_DEPTH_BUFFER );
-    conf.getIfSet( "halo_implementation", "depth_range",          _haloImplementation, osgText::Text::DEPTH_RANGE );
-    conf.getIfSet( "halo_implementation", "stencil_buffer",       _haloImplementation, osgText::Text::STENCIL_BUFFER );
-    conf.getIfSet( "halo_implementation", "delayed_depth_writes", _haloImplementation, osgText::Text::DELAYED_DEPTH_WRITES );
-    conf.getIfSet( "font", _font );
-    conf.getObjIfSet( "size", _size );
-    conf.getObjIfSet( "content", _content );
-    conf.getObjIfSet( "priority", _priority );
-    conf.getIfSet( "remove_duplicate_labels", _removeDuplicateLabels );
+    conf.get( "fill", _fill );
+    conf.get( "halo", _halo );
+    conf.get( "halo_offset", _haloOffset );
+    conf.get( "halo_backdrop_type", "right_bottom",  _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_RIGHT );
+    conf.get( "halo_backdrop_type", "right_center",  _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_RIGHT );
+    conf.get( "halo_backdrop_type", "right_top",     _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_RIGHT );
+    conf.get( "halo_backdrop_type", "center_bottom", _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_CENTER );
+    conf.get( "halo_backdrop_type", "center_top",    _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_CENTER );
+    conf.get( "halo_backdrop_type", "left_bottom",   _haloBackdropType, osgText::Text::DROP_SHADOW_BOTTOM_LEFT );
+    conf.get( "halo_backdrop_type", "left_center",   _haloBackdropType, osgText::Text::DROP_SHADOW_CENTER_LEFT );
+    conf.get( "halo_backdrop_type", "left_top",      _haloBackdropType, osgText::Text::DROP_SHADOW_TOP_LEFT );
+    conf.get( "halo_backdrop_type", "outline",       _haloBackdropType, osgText::Text::OUTLINE );
+    conf.get( "halo_backdrop_type", "none",          _haloBackdropType, osgText::Text::NONE );
+    conf.get( "halo_implementation", "polygon_offset",       _haloImplementation, osgText::Text::POLYGON_OFFSET );
+    conf.get( "halo_implementation", "no_depth_buffer",      _haloImplementation, osgText::Text::NO_DEPTH_BUFFER );
+    conf.get( "halo_implementation", "depth_range",          _haloImplementation, osgText::Text::DEPTH_RANGE );
+    conf.get( "halo_implementation", "stencil_buffer",       _haloImplementation, osgText::Text::STENCIL_BUFFER );
+    conf.get( "halo_implementation", "delayed_depth_writes", _haloImplementation, osgText::Text::DELAYED_DEPTH_WRITES );
+    conf.get( "font", _font );
+    conf.get( "size", _size );
+    conf.get( "content", _content );
+    conf.get( "priority", _priority );
 
-    conf.getIfSet( "encoding", "ascii", _encoding, ENCODING_ASCII );
-    conf.getIfSet( "encoding", "utf8",  _encoding, ENCODING_UTF8 );
-    conf.getIfSet( "encoding", "utf16", _encoding, ENCODING_UTF16 );
-    conf.getIfSet( "encoding", "utf32", _encoding, ENCODING_UTF32 );
+    conf.get( "encoding", "ascii", _encoding, ENCODING_ASCII );
+    conf.get( "encoding", "utf8",  _encoding, ENCODING_UTF8 );
+    conf.get( "encoding", "utf16", _encoding, ENCODING_UTF16 );
+    conf.get( "encoding", "utf32", _encoding, ENCODING_UTF32 );
 
-    conf.getIfSet( "alignment", "left_top",                _alignment, ALIGN_LEFT_TOP );
-    conf.getIfSet( "alignment", "left_center",             _alignment, ALIGN_LEFT_CENTER );
-    conf.getIfSet( "alignment", "left_bottom",             _alignment, ALIGN_LEFT_BOTTOM );
-    conf.getIfSet( "alignment", "center_top",              _alignment, ALIGN_CENTER_TOP );
-    conf.getIfSet( "alignment", "center_center",           _alignment, ALIGN_CENTER_CENTER );
-    conf.getIfSet( "alignment", "center_bottom",           _alignment, ALIGN_CENTER_BOTTOM );
-    conf.getIfSet( "alignment", "right_top",               _alignment, ALIGN_RIGHT_TOP );
-    conf.getIfSet( "alignment", "right_center",            _alignment, ALIGN_RIGHT_CENTER );
-    conf.getIfSet( "alignment", "right_bottom",            _alignment, ALIGN_RIGHT_BOTTOM );
-    conf.getIfSet( "alignment", "left_base_line",          _alignment, ALIGN_LEFT_BASE_LINE );
-    conf.getIfSet( "alignment", "center_base_line",        _alignment, ALIGN_CENTER_BASE_LINE );
-    conf.getIfSet( "alignment", "right_base_line",         _alignment, ALIGN_RIGHT_BASE_LINE );
-    conf.getIfSet( "alignment", "left_bottom_base_line",   _alignment, ALIGN_LEFT_BOTTOM_BASE_LINE );
-    conf.getIfSet( "alignment", "center_bottom_base_line", _alignment, ALIGN_CENTER_BOTTOM_BASE_LINE );
-    conf.getIfSet( "alignment", "right_bottom_base_line",  _alignment, ALIGN_RIGHT_BOTTOM_BASE_LINE );
-    conf.getIfSet( "alignment", "base_line" ,              _alignment, ALIGN_BASE_LINE );
+    conf.get( "alignment", "left_top",                _alignment, ALIGN_LEFT_TOP );
+    conf.get( "alignment", "left_center",             _alignment, ALIGN_LEFT_CENTER );
+    conf.get( "alignment", "left_bottom",             _alignment, ALIGN_LEFT_BOTTOM );
+    conf.get( "alignment", "center_top",              _alignment, ALIGN_CENTER_TOP );
+    conf.get( "alignment", "center_center",           _alignment, ALIGN_CENTER_CENTER );
+    conf.get( "alignment", "center_bottom",           _alignment, ALIGN_CENTER_BOTTOM );
+    conf.get( "alignment", "right_top",               _alignment, ALIGN_RIGHT_TOP );
+    conf.get( "alignment", "right_center",            _alignment, ALIGN_RIGHT_CENTER );
+    conf.get( "alignment", "right_bottom",            _alignment, ALIGN_RIGHT_BOTTOM );
+    conf.get( "alignment", "left_base_line",          _alignment, ALIGN_LEFT_BASE_LINE );
+    conf.get( "alignment", "center_base_line",        _alignment, ALIGN_CENTER_BASE_LINE );
+    conf.get( "alignment", "right_base_line",         _alignment, ALIGN_RIGHT_BASE_LINE );
+    conf.get( "alignment", "left_bottom_base_line",   _alignment, ALIGN_LEFT_BOTTOM_BASE_LINE );
+    conf.get( "alignment", "center_bottom_base_line", _alignment, ALIGN_CENTER_BOTTOM_BASE_LINE );
+    conf.get( "alignment", "right_bottom_base_line",  _alignment, ALIGN_RIGHT_BOTTOM_BASE_LINE );
+    conf.get( "alignment", "base_line" ,              _alignment, ALIGN_BASE_LINE );
 
-    conf.getIfSet( "layout", "ltr",  _layout, LAYOUT_LEFT_TO_RIGHT );
-    conf.getIfSet( "layout", "rtl",  _layout, LAYOUT_RIGHT_TO_LEFT );
-    conf.getIfSet( "layout", "vertical",  _layout, LAYOUT_VERTICAL );
+    conf.get( "layout", "ltr",  _layout, LAYOUT_LEFT_TO_RIGHT );
+    conf.get( "layout", "rtl",  _layout, LAYOUT_RIGHT_TO_LEFT );
+    conf.get( "layout", "vertical",  _layout, LAYOUT_VERTICAL );
 
-    conf.getIfSet( "declutter", _declutter );
+    conf.get( "declutter", _declutter );
 
-    conf.getIfSet( "provider", _provider );
+    conf.get( "provider", _provider );
     if ( conf.hasValue( "pixel_offset_x" ) )
         _pixelOffset = osg::Vec2s( conf.value<short>("pixel_offset_x",0), 0 );
     if ( conf.hasValue( "pixel_offset_y" ) )
         _pixelOffset = osg::Vec2s( _pixelOffset->x(), conf.value<short>("pixel_offset_y",0) );
 
-    conf.getObjIfSet( "rotation", _onScreenRotation );
-    conf.getObjIfSet( "geographic-course", _geographicCourse );
+    conf.get( "rotation", _onScreenRotation );
+    conf.get( "geographic-course", _geographicCourse );
 
-    conf.getIfSet( "text-occlusion-cull", _occlusionCull );
-    conf.getIfSet( "text-occlusion-cull-altitude", _occlusionCullAltitude );
+    conf.get( "text-occlusion-cull", _occlusionCull );
+    conf.get( "text-occlusion-cull-altitude", _occlusionCullAltitude );
 }
 
 
@@ -271,12 +267,6 @@ TextSymbol::parseSLD(const Config& c, Style& style)
             style.getOrCreate<TextSymbol>()->haloImplementation() = osgText::Text::STENCIL_BUFFER;
         else if ( match(c.value(), "delayed-depth-writes") )
             style.getOrCreate<TextSymbol>()->haloImplementation() = osgText::Text::DELAYED_DEPTH_WRITES;
-    }
-    else if ( match(c.key(), "text-remove-duplicate-labels") ) {
-        if ( c.value() == "true" )
-            style.getOrCreate<TextSymbol>()->removeDuplicateLabels() = true;
-        else if (c.value() == "false")
-            style.getOrCreate<TextSymbol>()->removeDuplicateLabels() = false;
     }
     else if ( match(c.key(), "text-align") ) {
         if      ( match(c.value(), "left-top") )

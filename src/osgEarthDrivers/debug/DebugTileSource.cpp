@@ -50,12 +50,15 @@ namespace
         ImageUtils::PixelReader read(src);
         ImageUtils::PixelWriter write(dst);
 
+        // for one-channel images, use the RED channel, otherwise ALPHA channel
+        unsigned chan = src->getPixelFormat() == GL_RED || src->getPixelFormat() == GL_LUMINANCE? 0 : 3;
+
         for( int src_t=0, dst_t=dy; src_t < src->t(); src_t++, dst_t++ )
         {
             for( int src_s=0, dst_s=dx; src_s < src->s(); src_s++, dst_s++ )
             {           
                 osg::Vec4 color = read(src_s, src_t);
-                if ( color.a() > 0.5f )
+                if ( color[chan] > 0.5f )
                     color = newColor;
                 write( color, dst_s, dst_t );
             }
@@ -109,18 +112,28 @@ public:
         {
             buf << key.str();
         }        
+
+        double r = key.getExtent().computeBoundingGeoCircle().getRadius();
+        buf << "\nr = " << (int)r << "m";
         
         std::string text;
         text = buf.str();
 
         unsigned x = 10, y = 10;
 
-        osgText::FontResolution resolution(32, 32);
+        int res = 32;
+        osgText::FontResolution resolution(res, res);
         for( unsigned i=0; i<text.length(); ++i )
         {
-            osgText::Glyph* glyph = _font->getGlyph( resolution, text.at(i) );
-            copySubImageAndColorize( glyph, image, x, y, _color );
-            x += glyph->s() + 1;
+            if (text[i] == '\n') {
+                y += res + 10;
+                x = 10;
+            }
+            else {            
+                osgText::Glyph* glyph = _font->getGlyph( resolution, text[i] );
+                copySubImageAndColorize( glyph, image, x, y, _color );
+                x += glyph->s() + 1;
+            }
         }
 
         return image;

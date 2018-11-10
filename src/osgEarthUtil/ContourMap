@@ -27,6 +27,7 @@
 #include <osgEarth/ImageLayer>
 #include <osgEarth/Extension>
 #include <osg/Texture1D>
+#include <osg/Texture2D>
 #include <osg/TransferFunction>
 
 namespace osgEarth {
@@ -53,13 +54,13 @@ namespace osgEarth { namespace Util
 
     public:
         void fromConfig(const Config& conf) {
-            conf.getIfSet("opacity", _opacity);
-            conf.getIfSet("grayscale", _grayscale);
+            conf.get("opacity", _opacity);
+            conf.get("grayscale", _grayscale);
         }
         Config getConfig() const {
             Config conf;
-            conf.addIfSet("opacity", _opacity);
-            conf.addIfSet("grayscale", _grayscale);
+            conf.set("opacity", _opacity);
+            conf.set("grayscale", _grayscale);
             return conf;
         }
         
@@ -76,6 +77,12 @@ namespace osgEarth { namespace Util
                                            public ContourMapOptions
     {
     public:
+#if defined(OSG_GLES2_AVAILABLE) || defined(OSG_GLES3_AVAILABLE)
+        typedef osg::Texture2D TextureType;
+#else
+        typedef osg::Texture1D TextureType;
+#endif
+    
         /** construct a new effect */
         ContourMap();
         ContourMap(const ConfigOptions& co);
@@ -98,7 +105,7 @@ namespace osgEarth { namespace Util
 
         int                                   _unit;
         osg::ref_ptr<osg::TransferFunction1D> _xfer;
-        osg::ref_ptr<osg::Texture1D>          _xferTexture;
+        osg::ref_ptr<TextureType>             _xferTexture;
         osg::ref_ptr<osg::Uniform>            _xferSampler;
         osg::ref_ptr<osg::Uniform>            _xferMin;
         osg::ref_ptr<osg::Uniform>            _xferRange;
@@ -111,7 +118,7 @@ namespace osgEarth { namespace Util
                                                     public ContourMapOptions
     {
     public:
-        META_Object(osgEarthUtil, ContourMapExtension);
+        META_OE_Extension(osgEarthUtil, ContourMapExtension, contour_map);
 
         ContourMapExtension() { }
         ContourMapExtension(const ConfigOptions& co) : ContourMapOptions(co) { }
@@ -121,12 +128,10 @@ namespace osgEarth { namespace Util
         bool disconnect(MapNode*);
 
     public: // Extension
-        
-        // for serialization
-        virtual const ConfigOptions& getConfigOptions() const { return *this; }
+
+        const ConfigOptions& getConfigOptions() const { return *this; }
 
     protected:
-        ContourMapExtension(const ContourMapExtension& rhs, const osg::CopyOp& op) { } // unused
         virtual ~ContourMapExtension() { }
 
         osg::ref_ptr<ContourMap> _effect;

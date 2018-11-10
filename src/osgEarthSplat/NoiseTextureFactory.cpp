@@ -20,7 +20,7 @@
 
 #include <osgEarth/ImageUtils>
 #include <osgEarth/Random>
-#include <osgEarthUtil/SimplexNoise>
+#include <osgEarth/SimplexNoise>
 #include <osg/Texture2D>
 
 using namespace osgEarth;
@@ -34,7 +34,7 @@ NoiseTextureFactory::create(unsigned dim, unsigned chans) const
 {
     chans = osg::clampBetween(chans, 1u, 4u);
 
-    GLenum type = chans >= 2u ? GL_RGBA : GL_LUMINANCE;
+    GLenum type = chans >= 2u ? GL_RGBA : GL_RED;
     
     osg::Image* image = new osg::Image();
     image->allocateImage(dim, dim, 1, type, GL_UNSIGNED_BYTE);
@@ -52,7 +52,7 @@ NoiseTextureFactory::create(unsigned dim, unsigned chans) const
     for(int k=0; k<chans; ++k)
     {
         // Configure the noise function:
-        osgEarth::Util::SimplexNoise noise;
+        osgEarth::SimplexNoise noise;
         noise.setNormalize( true );
         noise.setRange( 0.0, 1.0 );
         noise.setFrequency( F[k] );
@@ -114,6 +114,7 @@ NoiseTextureFactory::create(unsigned dim, unsigned chans) const
     tex->setFilter(tex->MAG_FILTER, tex->LINEAR);
     tex->setMaxAnisotropy( 4.0f );
     tex->setUnRefImageDataAfterApply( true );
+    ImageUtils::activateMipMaps(tex);
 
     return tex;
 }

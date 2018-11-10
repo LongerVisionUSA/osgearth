@@ -94,15 +94,17 @@ TMSTileSource::initialize(const osgDB::Options* dbOptions)
             profile,
             extents,
             _options.format().value(),
-            _options.tileSize().value(), 
-            _options.tileSize().value() );
+            256,
+            256);
+            //getPixelsPerTile(),
+            //getPixelsPerTile() );
 
         // If this is a new repo, write the tilemap file to disk now.
         if ( isNewRepo )
         {
             if ( !_options.format().isSet() )
             {
-                return Status::Error(Status::ConfigurationError, "Cannot create new repo with required [format] property");
+                return Status::Error(Status::ConfigurationError, "Missing required \"format\" property: e.g. png, jpg");
             }
 
             TMS::TileMapReaderWriter::write( _tileMap.get(), tmsURI.full() );
@@ -117,7 +119,7 @@ TMSTileSource::initialize(const osgDB::Options* dbOptions)
 
         if (!_tileMap.valid())
         {
-            return Status::Error( Status::ResourceUnavailable, Stringify() << "Failed to read tilemap from " << tmsURI.full() );
+            return Status::Error( Status::ResourceUnavailable, Stringify() << "Failed to read configuration from " << tmsURI.full() );
         }
 
         OE_INFO << LC
@@ -153,14 +155,8 @@ TMSTileSource::initialize(const osgDB::Options* dbOptions)
             {
                 this->getDataExtents().push_back(*itr);
             }
-        }
-        else
-        {
-            //Push back a single area that encompasses the whole profile going up to the max level
-            this->getDataExtents().push_back(DataExtent(profile->getExtent(), 0, _tileMap->getMaxLevel()));
-        }
+        }        
     }
- 
     return STATUS_OK;
 }
 
@@ -202,8 +198,9 @@ TMSTileSource::createImage(const TileKey&    key,
 
         osg::ref_ptr<osg::Image> image;
         if (!image_url.empty())
-        {
-            image = URI(image_url).readImage( _dbOptions.get(), progress ).getImage();
+        {     
+            URI uri(image_url, _options.url()->context());
+            image = uri.readImage( _dbOptions.get(), progress ).getImage();
         }
 
         if (!image.valid())
@@ -222,8 +219,8 @@ TMSTileSource::createImage(const TileKey&    key,
         
         if (image.valid() && _options.coverage() == true)
         {
-            image->setInternalTextureFormat(GL_LUMINANCE32F_ARB);
-            ImageUtils::markAsUnNormalized(image, true);
+            image->setInternalTextureFormat(GL_R16F);
+            ImageUtils::markAsUnNormalized(image.get(), true);
         }
 
         return image.release();

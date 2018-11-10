@@ -20,58 +20,46 @@
 #define OSGEARTH_DRIVERS_REX_TERRAIN_ENGINE_SELECTION_INFO 1
 
 #include "Common"
+#include <osg/NodeVisitor>
+#include <osgEarth/Profile>
 #include <vector>
 
 
 namespace osgEarth { namespace Drivers { namespace RexTerrainEngine
 {
-    struct VisParameters
-    {
-        double _visibilityRange;
-        double _visibilityRange2;
-        double _fMorphStart;
-        double _fMorphEnd;
-    };
+    /**
+     * SelectionInfo is a data structure that holds the LOD distance switching 
+     * information for the terrain, to support paging and LOD morphing. 
+     * This is calculated once when the terrain is first created.
+     */
     class SelectionInfo
     {
     public:
-        SelectionInfo() : _numLods(0), _uiFirstLOD(0) { }
+        struct LOD
+        {
+            double _visibilityRange;
+            double _morphStart;
+            double _morphEnd;
+        };
 
-        bool initialized(void) const;
-        void initialize(unsigned uiFirstLOD, unsigned uiMaxLod, unsigned uiTileSize, double fLodFar);
+    public:
+        SelectionInfo() : _firstLOD(0) { }
 
-        unsigned numLods(void) const;
+        //! Initialize the selection into LODs
+        void initialize(unsigned firstLod, unsigned maxLod, const Profile* profile, double mtrf);
 
-        // Dimensions of the skeleton grid in X
-        unsigned gridDimX(void) const;
+        //! Number of LODs
+        unsigned getNumLODs(void) const { return _lods.size(); }
 
-        // Dimensions of the skeleton grid in Y
-        unsigned gridDimY(void) const;
+        //! Visibility and morphing information for a specific LOD
+        const LOD& getLOD(unsigned lod) const;
 
-        // Morph start ratio
-        static double   morphStartRatio(void);
-
-        // LOD at which morphing should start
-        static unsigned lodForMorphing(bool isProjected);
-
-        VisParameters visParameters(unsigned lod) const;
     private:
-        unsigned                        _numLods;
-        std::pair<unsigned, unsigned>   _uiGridDimensions; 
-        std::vector<VisParameters>      _vecVisParams;
-        unsigned                        _uiFirstLOD;
-
-        static const double             _fMorphStartRatio; 
-
-        // This is the lod at which morphing should start (used by shader)
-        static const unsigned           _uiLODForMorphingRoundEarth;
-        
-        // This is used to determine _numLods given a fLodFar during initialize
-        // initialize. This is the distance beyond which further lods (and 
-        // hence VisParameters) are not generated
-        static const double             _fLodLowerBound;
+        std::vector<LOD>    _lods;
+        unsigned            _firstLOD;
+        static const double _morphStartRatio;
     };
-}
-}
-}
+
+} } } // namespace
+
 #endif

@@ -34,11 +34,10 @@ namespace osgEarth { namespace MapInspector
      */
     class MapInspectorExtension : public Extension,
                                   public ExtensionInterface<MapNode>,
-                                  public ExtensionInterface<Control>,
-                                  public MapCallback
+                                  public ExtensionInterface<Control>
     {
     public:
-        META_Object(osgearth_ext_MapInspector, MapInspectorExtension);
+        META_OE_Extension(osgEarth, MapInspectorExtension, mapinspector);
 
         // CTORs
         MapInspectorExtension();
@@ -47,6 +46,7 @@ namespace osgEarth { namespace MapInspector
         // DTOR
         virtual ~MapInspectorExtension();
 
+        void updateUI();
 
     public: // ExtensionInterface<MapNode>
 
@@ -60,21 +60,13 @@ namespace osgEarth { namespace MapInspector
         bool connect(Control* control);
 
         bool disconnect(Control* control);
-
         
-    public: // MapCallback
-
-        void onMapModelChanged(const MapModelChange& change);
-
-
-    protected: // Object
-
-        MapInspectorExtension(const MapInspectorExtension& rhs, const osg::CopyOp& op) { }
 
 
     private:
         osg::observer_ptr<MapNode> _mapNode;
         osg::ref_ptr<Control>      _ui;
+        osg::ref_ptr<MapCallback>  _mapCallback;
 
         void ctor();
     };

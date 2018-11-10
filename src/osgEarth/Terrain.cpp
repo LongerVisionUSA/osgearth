@@ -18,9 +18,6 @@
  */
 
 #include <osgEarth/Terrain>
-#include <osgEarth/DPLineSegmentIntersector>
-#include <osgUtil/IntersectionVisitor>
-#include <osgUtil/LineSegmentIntersector>
 #include <osgViewer/View>
 
 #define LC "[Terrain] "
@@ -29,64 +26,53 @@ using namespace osgEarth;
 
 //---------------------------------------------------------------------------
 
-namespace
+Terrain::OnTileAddedOperation::OnTileAddedOperation(const TileKey& key, osg::Node* node, Terrain* terrain)
+    : osg::Operation("OnTileAdded", true),
+        _terrain(terrain), _key(key), _node(node), _count(0), _delay(0) { }
+
+void Terrain::OnTileAddedOperation::operator()(osg::Object*)
 {
-    struct BaseOp : public osg::Operation
+    if ( getKeep() == false )
+        return;
+
+    if (_delay-- > 0)
+        return;
+
+    ++_count;
+    osg::ref_ptr<Terrain>   terrain;
+    osg::ref_ptr<osg::Node> node;
+    
+    if ( _terrain.lock(terrain) && (!_key.valid() || _node.lock(node)) )
     {
-        BaseOp(Terrain* terrain, bool keepByDefault) : osg::Operation("",keepByDefault), _terrain(terrain) { }
-        osg::observer_ptr<Terrain> _terrain;
-    };
+        if (_key.valid())
+            terrain->fireTileAdded( _key, node.get() );
+        else
+            terrain->fireTileAdded( _key, 0L );
 
-    struct OnTileAddedOperation : public BaseOp
+    }
+    else
     {
-        TileKey _key;
-        osg::observer_ptr<osg::Node> _node;
-        unsigned _count;
+        // nop; tile expired; let it go.
+        OE_DEBUG << "Tile expired before notification: " << _key.str() << std::endl;
+    }
 
-        OnTileAddedOperation(const TileKey& key, osg::Node* node, Terrain* terrain)
-            : BaseOp(terrain, true), _key(key), _node(node), _count(0) { }
-
-        void operator()(osg::Object*)
-        {
-            if ( getKeep() == false )
-                return;
-
-            ++_count;
-            osg::ref_ptr<Terrain>   terrain;
-            osg::ref_ptr<osg::Node> node;
-
-            if ( _terrain.lock(terrain) && _node.lock(node) )
-            {
-                if ( node->getNumParents() > 0 )
-                {
-                    //OE_NOTICE << LC << "FIRING onTileAdded for " << _key.str() << " (tries=" << _count << ")" << std::endl;
-                    terrain->fireTileAdded( _key, node.get() );
-                    this->setKeep( false );
-                }
-                else
-                {
-                    //OE_NOTICE << LC << "Deferring onTileAdded for " << _key.str() << std::endl;
-                }
-            }
-            else
-            {
-                // nop; tile expired; let it go.
-                //OE_NOTICE << "Tile expired before notification: " << _key.str() << std::endl;
-                this->setKeep( false );
-            }
-        }
-    };
+    this->setKeep( false );
 }
 
 //---------------------------------------------------------------------------
 
-Terrain::Terrain(osg::Node* graph, const Profile* mapProfile, bool geocentric, const TerrainOptions& terrainOptions ) :
+Terrain::Terrain(osg::Node* graph, const Profile* mapProfile, const TerrainOptions& terrainOptions ) :
 _graph         ( graph ),
 _profile       ( mapProfile ),
-_geocentric    ( geocentric ),
 _terrainOptions( terrainOptions )
 {
-    //nop
+    _updateQueue = new osg::OperationQueue();
+}
+
+void
+Terrain::update()
+{
+    _updateQueue->runOperations();
 }
 
 bool
@@ -123,20 +109,20 @@ Terrain::getHeight(osg::Node*              patch,
     }
 
     const osg::EllipsoidModel* em = getSRS()->getEllipsoid();
-    double r = std::min( em->getRadiusEquator(), em->getRadiusPolar() );
+    double r = osg::minimum( em->getRadiusEquator(), em->getRadiusPolar() );
 
     // calculate the endpoints for an intersection test:
     osg::Vec3d start(x, y, r);
     osg::Vec3d end  (x, y, -r);
 
-    if ( isGeocentric() )
+    if ( getSRS()->isGeographic() )
     {
-        const SpatialReference* ecef = getSRS()->getECEF();
+        const SpatialReference* ecef = getSRS()->getGeocentricSRS();
         getSRS()->transform(start, ecef, start);
         getSRS()->transform(end,   ecef, end);
     }
 
-    DPLineSegmentIntersector* lsi = new DPLineSegmentIntersector( start, end );
+    osgUtil::LineSegmentIntersector* lsi = new osgUtil::LineSegmentIntersector( start, end );
     lsi->setIntersectionLimit(osgUtil::Intersector::LIMIT_NEAREST);
 
     osgUtil::IntersectionVisitor iv( lsi );
@@ -180,34 +166,19 @@ Terrain::getWorldCoordsUnderMouse(osg::View* view, float x, float y, osg::Vec3d&
     if ( !view2 || !_graph.valid() )
         return false;
 
-    osgUtil::LineSegmentIntersector::Intersections intersections;
-
-    osg::NodePath nodePath;
-    nodePath.push_back( _graph.get() );
-
-#if 0
-    // Old code, uses the computeIntersections method directly but sufferes from floating point precision problems.
-    if ( view2->computeIntersections( x, y, nodePath, intersections, traversalMask ) )
-    {
-        // find the first hit under the mouse:
-        osgUtil::LineSegmentIntersector::Intersection first = *(intersections.begin());
-        out_coords = first.getWorldIntersectPoint();
-        return true;
-    }
-    return false;    
-
-#else
-    // New code, uses the code from osg::View::computeIntersections but uses our DPLineSegmentIntersector instead to get around floating point precision issues.
     float local_x, local_y = 0.0;
     const osg::Camera* camera = view2->getCameraContainingPosition(x, y, local_x, local_y);
-    if (!camera) camera = view2->getCamera();
+    if (!camera)
+        camera = view2->getCamera();
 
+    // Build a matrix that transforms from the terrain/world space
+    // to either clip or window space, depending on whether we have
+    // a viewport. Is it even possible to not have a viewport? -gw
     osg::Matrixd matrix;
-    if (nodePath.size()>1)
-    {
-        osg::NodePath prunedNodePath(nodePath.begin(),nodePath.end()-1);
-        matrix = osg::computeLocalToWorld(prunedNodePath);
-    }
+
+    // compensate for any transforms applied between terrain and camera:
+    osg::Matrix terrainRefFrame = osg::computeLocalToWorld(_graph->getParentalNodePaths()[0]);
+    matrix.postMult(terrainRefFrame);
 
     matrix.postMult(camera->getViewMatrix());
     matrix.postMult(camera->getProjectionMatrix());
@@ -217,8 +188,7 @@ Terrain::getWorldCoordsUnderMouse(osg::View* view, float x, float y, osg::Vec3d&
     if (camera->getViewport())
     {
         matrix.postMult(camera->getViewport()->computeWindowMatrix());
-        zNear = 0.0;
-        zFar = 1.0;
+        zNear = 0.0, zFar = 1.0;
     }
 
     osg::Matrixd inverse;
@@ -227,60 +197,23 @@ Terrain::getWorldCoordsUnderMouse(osg::View* view, float x, float y, osg::Vec3d&
     osg::Vec3d startVertex = osg::Vec3d(local_x,local_y,zNear) * inverse;
     osg::Vec3d endVertex = osg::Vec3d(local_x,local_y,zFar) * inverse;
 
-    // Use a double precision line segment intersector
-    //osg::ref_ptr< osgUtil::LineSegmentIntersector > picker = new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL, startVertex, endVertex);
-    osg::ref_ptr< DPLineSegmentIntersector > picker = new DPLineSegmentIntersector(osgUtil::Intersector::MODEL, startVertex, endVertex);
+    osg::ref_ptr< osgUtil::LineSegmentIntersector > picker = 
+        new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL, startVertex, endVertex);
 
-    // Limit it to one intersection, we only care about the first
+    // Limit it to one intersection; we only care about the nearest.
     picker->setIntersectionLimit( osgUtil::Intersector::LIMIT_NEAREST );
 
     osgUtil::IntersectionVisitor iv(picker.get());
-    nodePath.back()->accept(iv);
+    _graph->accept(iv);
 
+    bool good = false;
     if (picker->containsIntersections())
     {        
-        intersections = picker->getIntersections();
-        // find the first hit under the mouse:
-        osgUtil::LineSegmentIntersector::Intersection first = *(intersections.begin());
-        out_coords = first.getWorldIntersectPoint();        
-        return true;       
+        out_coords = picker->getIntersections().begin()->getWorldIntersectPoint();
+        good = true;       
     }
-    return false;        
-#endif
+    return good;
 }
-
-
-bool
-Terrain::getWorldCoordsUnderMouse(osg::View* view,
-                                  float x, float y,
-                                  osg::Vec3d& out_coords,
-                                  osg::ref_ptr<osg::Node>& out_node ) const
-{
-    osgViewer::View* view2 = dynamic_cast<osgViewer::View*>(view);
-    if ( !view2 || !_graph.valid() )
-        return false;
-
-    osgUtil::LineSegmentIntersector::Intersections results;
-
-    osg::NodePath path;
-    path.push_back( _graph.get() );
-
-    if ( view2->computeIntersections( x, y, path, results ) )
-    {
-        // find the first hit under the mouse:
-        osgUtil::LineSegmentIntersector::Intersection first = *(results.begin());
-        out_coords = first.getWorldIntersectPoint();
-        for( osg::NodePath::reverse_iterator j = first.nodePath.rbegin(); j != first.nodePath.rend(); ++j ) {
-            if ( !(*j)->getName().empty() ) {
-                out_node = (*j);
-                break;
-            }
-        }
-        return true;
-    }
-    return false;
-}
-
 
 void
 Terrain::addTerrainCallback( TerrainCallback* cb )
@@ -322,10 +255,12 @@ Terrain::notifyTileAdded( const TileKey& key, osg::Node* node )
         OE_WARN << LC << "notify with a null node!" << std::endl;
     }
 
-    osg::ref_ptr<osg::OperationQueue> queue;
-    if ( _callbacksSize > 0 && _updateOperationQueue.lock(queue) )
+    if (_callbacksSize > 0)
     {
-        queue->add( new OnTileAddedOperation(key, node, this) );
+        if (!key.valid())
+            OE_WARN << LC << "notifyTileAdded with key = NULL\n";
+
+        _updateQueue->add(new OnTileAddedOperation(key, node, this));
     }
 }
 
@@ -347,44 +282,24 @@ Terrain::fireTileAdded( const TileKey& key, osg::Node* node )
     }
 }
 
+void
+Terrain::notifyMapElevationChanged()
+{
+    if (_callbacksSize > 0)
+    {
+        OnTileAddedOperation* op = new OnTileAddedOperation(TileKey::INVALID, 0L, this);
+        op->_delay = 1; // let the terrain update before applying this
+        _updateQueue->add(op);
+    }
+}
 
+void
+Terrain::fireMapElevationChanged()
+{
+    // nop
+}
 void
 Terrain::accept( osg::NodeVisitor& nv )
 {
     _graph->accept( nv );
-}
-
-
-//---------------------------------------------------------------------------
-
-#undef  LC
-#define LC "[TerrainPatch] "
-
-TerrainPatch::TerrainPatch(osg::Node* patch, const Terrain* terrain) :
-_patch  ( patch ),
-_terrain( terrain )
-{
-    //nop
-    if ( patch == 0L || terrain == 0L )
-    {
-        OE_WARN << "ILLEGAL: Created a TerrainPatch with a NULL parameter" << std::endl;
-    }
-}
-
-
-bool
-TerrainPatch::getHeight(const SpatialReference* srs,
-                        double                  x, 
-                        double                  y,
-                        double*                 out_hamsl,
-                        double*                 out_hae ) const
-{
-    if ( _terrain && _patch )
-    {
-        return _terrain->getHeight( _patch.get(), srs, x, y, out_hamsl, out_hae );
-    }
-    else
-    {
-        return false;
-    }
 }

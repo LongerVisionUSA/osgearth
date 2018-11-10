@@ -25,7 +25,6 @@
 
 #include <osgEarthFeatures/Common>
 #include <osgEarthFeatures/Feature>
-#include <osgEarthFeatures/FeatureCursor>
 #include <osgEarthFeatures/FeatureSource>
 
 #include <osgEarth/Profile>
@@ -33,10 +32,12 @@
 
 namespace osgEarth { namespace Features
 {   
+    class FeatureCursor;
+
     /**
-     * @deprecated - use a FeatureNode instead
+     * @deprecated - use a FeatureNode instead (remove after 2.10)
      */
-    class OSGEARTHFEATURES_EXPORT FeatureListSource : public osgEarth::Features::FeatureSource
+    class OSGEARTHFEATURES_EXPORT FeatureListSource : public FeatureSource
     {
     public:
         /**
@@ -52,8 +53,10 @@ namespace osgEarth { namespace Features
         FeatureListSource(const GeoExtent& defaultExtent );
 
         virtual ~FeatureListSource() { }
+        
+        virtual Status initialize(const osgDB::Options* readOptions) { return Status::OK();  }
 
-        virtual FeatureCursor* createFeatureCursor( const Symbology::Query& query );
+        virtual FeatureCursor* createFeatureCursor(const Symbology::Query& query, ProgressCallback* progress);
 
         virtual bool isWritable() const { return true; }
         virtual bool deleteFeature(FeatureID fid);

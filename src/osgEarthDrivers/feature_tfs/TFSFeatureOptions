@@ -65,11 +65,11 @@ namespace osgEarth { namespace Drivers
     public:
         Config getConfig() const {
             Config conf = FeatureSourceOptions::getConfig();
-            conf.updateIfSet( "url", _url ); 
-            conf.updateIfSet( "format", _format );
-            conf.updateIfSet( "invert_y", _invertY);
-            conf.updateIfSet( "min_level", _minLevel);
-            conf.updateIfSet( "max_level", _maxLevel);
+            conf.set( "url", _url ); 
+            conf.set( "format", _format );
+            conf.set( "invert_y", _invertY);
+            conf.set( "min_level", _minLevel);
+            conf.set( "max_level", _maxLevel);
             return conf;
         }
 
@@ -81,11 +81,11 @@ namespace osgEarth { namespace Drivers
 
     private:
         void fromConfig( const Config& conf ) {
-            conf.getIfSet( "url", _url );
-            conf.getIfSet( "format", _format );
-            conf.getIfSet( "invert_y", _invertY );
-            conf.getIfSet( "min_level", _minLevel);
-            conf.getIfSet( "max_level", _maxLevel);
+            conf.get( "url", _url );
+            conf.get( "format", _format );
+            conf.get( "invert_y", _invertY );
+            conf.get( "min_level", _minLevel);
+            conf.get( "max_level", _maxLevel);
         }
 
         optional<URI>         _url;        

@@ -21,10 +21,7 @@
 */
 #include <osgEarthUtil/LODBlending>
 #include <osgEarth/Registry>
-#include <osgEarth/Capabilities>
-#include <osgEarth/VirtualProgram>
 #include <osgEarth/TerrainEngineNode>
-#include <osgEarth/Extension>
 #include <osgEarth/MapNode>
 
 #define LC "[LODBlending] "
@@ -61,11 +58,11 @@ namespace
         "uniform float oe_tile_birthtime; \n"
         "uniform float oe_lodblend_delay; \n"
         "uniform float oe_lodblend_duration; \n"
-
         "uniform mat4 oe_layer_parent_texmat; \n"
-        "varying vec4 oe_layer_texc; \n"
-        "varying vec4 oe_lodblend_texc; \n"
-        "varying float oe_lodblend_r; \n"
+
+        "out vec4 oe_layer_texc; \n"
+        "out vec4 oe_lodblend_texc; \n"
+        "out float oe_lodblend_r; \n"
 
         "void oe_lodblend_imagery_vertex(inout vec4 VertexVIEW) \n"
         "{ \n"
@@ -86,9 +83,10 @@ namespace
         "#version " GLSL_VERSION_STR "\n"
         GLSL_DEFAULT_PRECISION_FLOAT "\n"
 
-        "attribute vec4 oe_terrain_attr; \n"
-        "attribute vec4 oe_terrain_attr2; \n"
-        "varying vec3 vp_Normal; \n"
+        "in vec4 oe_terrain_attr; \n"
+        "in vec4 oe_terrain_attr2; \n"
+        
+        "vec3 vp_Normal; \n"
 
         "uniform float oe_min_tile_range_factor; \n"
         "uniform vec4 oe_tile_key; \n"
@@ -123,9 +121,10 @@ namespace
         "#version " GLSL_VERSION_STR "\n"
         GLSL_DEFAULT_PRECISION_FLOAT "\n"
 
-        "attribute vec4 oe_terrain_attr; \n"
-        "attribute vec4 oe_terrain_attr2; \n"
-        "varying vec3 vp_Normal; \n"
+        "in vec4 oe_terrain_attr; \n"
+        "in vec4 oe_terrain_attr2; \n"
+
+        "vec3 vp_Normal; \n"
 
         "uniform float oe_min_tile_range_factor; \n"
         "uniform vec4 oe_tile_key; \n"
@@ -134,11 +133,11 @@ namespace
         "uniform float oe_lodblend_delay; \n"
         "uniform float oe_lodblend_duration; \n"
         "uniform float oe_lodblend_vscale; \n"
-
         "uniform mat4 oe_layer_parent_texmat; \n"
-        "varying vec4 oe_layer_texc; \n"
-        "varying vec4 oe_lodblend_texc; \n"
-        "varying float oe_lodblend_r; \n"
+
+        "out vec4 oe_layer_texc; \n"
+        "out vec4 oe_lodblend_texc; \n"
+        "out float oe_lodblend_r; \n"
 
         "void oe_lodblend_combined_vertex(inout vec4 VertexMODEL) \n"
         "{ \n"
@@ -172,9 +171,10 @@ namespace
 
         "uniform vec4 oe_tile_key; \n"
         "uniform int oe_layer_uid; \n"
-        "varying vec4 oe_lodblend_texc; \n"
-        "varying float oe_lodblend_r; \n"
         "uniform sampler2D oe_layer_tex_parent; \n"
+
+        "in vec4 oe_lodblend_texc; \n"
+        "in float oe_lodblend_r; \n"
 
         "void oe_lodblend_imagery_fragment(inout vec4 color) \n"
         "{ \n"
@@ -187,6 +187,11 @@ namespace
         "        color = mix(color, texel, oe_lodblend_r); \n"
         "    } \n"
         "} \n";
+}
+
+LODBlending::LODBlending()
+{
+    init();
 }
 
 
@@ -216,6 +221,12 @@ LODBlending::onInstall(TerrainEngineNode* engine)
 {
     if ( engine )
     {
+        if (engine->getName() == "osgEarth.RexTerrainEngineNode")
+        {
+            OE_WARN << LC << "LODBlending extension will be disabled; terrain engine supports blending natively" << std::endl;
+            return;
+        }
+
         // need the parent textures for blending.
         engine->requireParentTextures();
 
@@ -282,7 +293,7 @@ class LODBlendingExtension : public Extension,
                              public LODBlendingOptions
 {
 public:
-    META_Object(osgearth_ext_lodblending, LODBlendingExtension);
+    META_OE_Extension(osgEarth, LODBlendingExtension, lod_blending);
 
     // CTORs
     LODBlendingExtension() { }
@@ -318,10 +329,6 @@ public: // ExtensionInterface<MapNode>
         }
         return true;
     }
-
-
-protected: // Object
-    LODBlendingExtension(const LODBlendingExtension& rhs, const osg::CopyOp& op) { }
 
 private:
     osg::ref_ptr<LODBlending> _effect;

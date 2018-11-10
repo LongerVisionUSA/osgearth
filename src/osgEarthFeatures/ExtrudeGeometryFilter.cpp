@@ -19,12 +19,18 @@
 #include <osgEarthFeatures/ExtrudeGeometryFilter>
 #include <osgEarthFeatures/Session>
 #include <osgEarthFeatures/FeatureSourceIndexNode>
-#include <osgEarthSymbology/ResourceCache>
+
+#include <osgEarthSymbology/ResourceLibrary>
+#include <osgEarthSymbology/StyleSheet>
+
 #include <osgEarth/ECEF>
 #include <osgEarth/ImageUtils>
 #include <osgEarth/Clamping>
 #include <osgEarth/Utils>
 #include <osgEarth/Tessellator>
+#include <osgEarth/LineDrawable>
+#include <osgEarth/StateSetCache>
+
 #include <osg/Geode>
 #include <osg/Geometry>
 #include <osg/MatrixTransform>
@@ -162,6 +168,13 @@ ExtrudeGeometryFilter::reset( const FilterContext& context )
 
             // if there's a line symbol, use it to outline the extruded data.
             _outlineSymbol = _style.get<LineSymbol>();
+
+            // ...unless a wall poly symbol overrides it.
+            if (_wallPolygonSymbol.valid() && _wallPolygonSymbol->outline() == false)
+                _outlineSymbol = 0L;
+
+            if (_roofPolygonSymbol.valid() && _roofPolygonSymbol->outline() == false)
+                _outlineSymbol = 0L;
         }
 
         // backup plan for skin symbols:
@@ -205,8 +218,8 @@ ExtrudeGeometryFilter::buildStructure(const Geometry*         input,
     if ( cx.isGeoreferenced() )
     {
        srs      = cx.extent()->getSRS();
-       makeECEF = cx.getSession()->getMapInfo().isGeocentric();
-       mapSRS   = cx.getSession()->getMapInfo().getProfile()->getSRS();
+       mapSRS   = cx.getSession()->getMapSRS();
+       makeECEF = cx.getSession()->getMapSRS()->isGeographic(); //->getMapInfo().isGeocentric();
     }
 
     // whether this is a closed polygon structure.
@@ -418,11 +431,19 @@ ExtrudeGeometryFilter::buildStructure(const Geometry*         input,
                     // insert a new fake corner.
 					Corners::iterator new_corner;
 
-                    if ( isLastEdge )
+                    if (isLastEdge)
                     {
-						corners.push_back(Corner());
-						new_corner = c;
-						new_corner++;
+                        if (structure.isPolygon)
+                        {
+                            corners.push_back(Corner());
+                            new_corner = c;
+                            new_corner++;
+                        }
+                        else
+                        {
+                            // We only add a fake corner at the end for polygons
+                            break;
+                        }
                     }
                     else
                     {
@@ -545,9 +566,8 @@ ExtrudeGeometryFilter::buildWallGeometry(const Structure&     structure,
     osg::Vec4Array* colors = 0L;
     if ( useColor )
     {
-        colors = new osg::Vec4Array( numWallVerts );
+        colors = new osg::Vec4Array( osg::Array::BIND_PER_VERTEX, numWallVerts );
         walls->setColorArray( colors );
-        walls->setColorBinding( osg::Geometry::BIND_PER_VERTEX );
     }
 
     osg::Vec4Array* anchors = 0L;
@@ -555,10 +575,9 @@ ExtrudeGeometryFilter::buildWallGeometry(const Structure&     structure,
     // If GPU clamping is in effect, create clamping attributes.
     if ( _gpuClamping )
     {
-        anchors = new osg::Vec4Array( numWallVerts );
+        anchors = new osg::Vec4Array( osg::Array::BIND_PER_VERTEX, numWallVerts );
+        anchors->setNormalize(false);
         walls->setVertexAttribArray    ( Clamping::AnchorAttrLocation, anchors );
-        walls->setVertexAttribBinding  ( Clamping::AnchorAttrLocation, osg::Geometry::BIND_PER_VERTEX );
-        walls->setVertexAttribNormalize( Clamping::AnchorAttrLocation, false );
     }
 
     unsigned vertptr = 0;
@@ -687,9 +706,8 @@ ExtrudeGeometryFilter::buildRoofGeometry(const Structure&     structure,
     osg::Vec3Array* verts = new osg::Vec3Array();
     roof->setVertexArray( verts );
 
-    osg::Vec4Array* color = new osg::Vec4Array();
+    osg::Vec4Array* color = new osg::Vec4Array(osg::Array::BIND_PER_VERTEX);
     roof->setColorArray( color );
-    roof->setColorBinding( osg::Geometry::BIND_PER_VERTEX );
 
     osg::Vec3Array* tex = 0L;
     if ( roofSkin )
@@ -755,9 +773,8 @@ ExtrudeGeometryFilter::buildRoofGeometry(const Structure&     structure,
         roof->addPrimitiveSet( new osg::DrawArrays(GL_LINE_LOOP, elevptr, vertptr-elevptr) );
     } 
 
-    osg::Vec3Array* normal = new osg::Vec3Array(verts->size());
+    osg::Vec3Array* normal = new osg::Vec3Array(osg::Array::BIND_PER_VERTEX, verts->size());
     roof->setNormalArray( normal );
-    roof->setNormalBinding( osg::Geometry::BIND_PER_VERTEX );
     normal->assign( verts->size(), osg::Vec3(0,0,1) );
 
     int v = verts->size();
@@ -781,9 +798,9 @@ ExtrudeGeometryFilter::buildRoofGeometry(const Structure&     structure,
         osg::Vec4Array* a = static_cast<osg::Vec4Array*>(roof->getTexCoordArray(1));
         if ( a )
         {
-            roof->setVertexAttribArray    ( Clamping::AnchorAttrLocation, a );
-            roof->setVertexAttribBinding  ( Clamping::AnchorAttrLocation, osg::Geometry::BIND_PER_VERTEX );
-            roof->setVertexAttribNormalize( Clamping::AnchorAttrLocation, false );
+            a->setBinding(osg::Array::BIND_PER_VERTEX);
+            a->setNormalize(false);
+            roof->setVertexAttribArray( Clamping::AnchorAttrLocation, a );
             roof->setTexCoordArray(1, 0L);
         }
     }
@@ -792,33 +809,35 @@ ExtrudeGeometryFilter::buildRoofGeometry(const Structure&     structure,
 }
 
 
-bool
-ExtrudeGeometryFilter::buildOutlineGeometry(const Structure&  structure,
-                                            osg::Geometry*    outline,
-                                            const osg::Vec4&  outlineColor,
-                                            float             minCreaseAngleDeg)
+osg::Drawable*
+ExtrudeGeometryFilter::buildOutlineGeometry(const Structure& structure)
 {
     // minimum angle between adjacent faces for which to draw a post.
-    const float cosMinAngle = cos(osg::DegreesToRadians(minCreaseAngleDeg));
+    const float cosMinAngle = cos(osg::DegreesToRadians(_outlineSymbol->creaseAngle().get()));
 
-    osg::Vec3Array* verts = new osg::Vec3Array();
-    outline->setVertexArray( verts );
+    osg::ref_ptr<LineDrawable> lines = new LineDrawable(GL_LINES);
+    
+    const optional<Stroke>& stroke = _outlineSymbol->stroke();
+    if (stroke.isSet())
+    {
+        lines->setColor(stroke->color());
 
-    osg::Vec4Array* color = new osg::Vec4Array();
-    outline->setColorArray( color );
-    outline->setColorBinding( osg::Geometry::BIND_OVERALL );
-    color->push_back( outlineColor );
+        if (stroke->width().isSet())
+            lines->setLineWidth(stroke->width().get());
 
-    osg::DrawElements* de = new osg::DrawElementsUInt(GL_LINES);
-    outline->addPrimitiveSet(de);
-        
+        if (stroke->stipplePattern().isSet())
+            lines->setStipplePattern(stroke->stipplePattern().get());
+
+        if (stroke->stippleFactor().isSet())
+            lines->setStippleFactor(stroke->stippleFactor().get());
+    }
+
     osg::Vec4Array* anchors = 0L;
     if ( _gpuClamping )
     {
         anchors = new osg::Vec4Array();
-        outline->setVertexAttribArray    ( Clamping::AnchorAttrLocation, anchors );
-        outline->setVertexAttribBinding  ( Clamping::AnchorAttrLocation, osg::Geometry::BIND_PER_VERTEX );
-        outline->setVertexAttribNormalize( Clamping::AnchorAttrLocation, false );
+        anchors->setBinding(osg::Array::BIND_PER_VERTEX);
+        lines->setVertexAttribArray( Clamping::AnchorAttrLocation, anchors );
     }
 
     bool flatten =
@@ -830,11 +849,10 @@ ExtrudeGeometryFilter::buildOutlineGeometry(const Structure&  structure,
         y  = structure.baseCentroid.y(),
         vo = structure.verticalOffset;
 
-    unsigned vertptr = 0;
     for(Elevations::const_iterator e = structure.elevations.begin(); e != structure.elevations.end(); ++e)
     {
         osg::Vec3d prev_vec;
-        unsigned elevptr = vertptr;
+
         for(Faces::const_iterator f = e->faces.begin(); f != e->faces.end(); ++f)
         {
             // Only use source verts for posts.
@@ -849,31 +867,45 @@ ExtrudeGeometryFilter::buildOutlineGeometry(const Structure&  structure,
                 drawPost = (this_vec * prev_vec) < cosMinAngle;
             }
 
-            if ( drawPost || drawCrossbar )
+            if (drawPost)
             {
-                verts->push_back( f->left.roof );
-                if ( anchors && flatten  ) anchors->push_back(osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
-                if ( anchors && !flatten ) anchors->push_back(osg::Vec4f(x, y, vo + f->left.height, Clamping::ClampToGround));
+                lines->pushVertex(f->left.roof);
+                lines->pushVertex(f->left.base);
+                
+                if (anchors)
+                {
+                    if (flatten) 
+                    {
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
+                    }
+                    else
+                    {
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo + f->left.height, Clamping::ClampToGround));
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo, Clamping::ClampToGround));
+                    }
+                }
             }
 
-            if ( drawPost )
+            if (drawCrossbar)
             {
-                verts->push_back( f->left.base );
-                if ( anchors ) anchors->push_back( osg::Vec4f(x, y, vo, Clamping::ClampToGround) );
-                de->addElement(vertptr);
-                de->addElement(verts->size()-1);
+                lines->pushVertex(f->left.roof);
+                lines->pushVertex(f->right.roof);
+                
+                if (anchors)
+                {
+                    if (flatten) 
+                    {
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
+                    }
+                    else
+                    {
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo + f->left.height, Clamping::ClampToGround));
+                        lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo + f->right.height, Clamping::ClampToGround));
+                    }
+                }
             }
-
-            if ( drawCrossbar )
-            {
-                verts->push_back( f->right.roof );
-                if ( anchors && flatten  ) anchors->push_back(osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
-                if ( anchors && !flatten ) anchors->push_back(osg::Vec4f(x, y, vo + f->right.height, Clamping::ClampToGround));
-                de->addElement(vertptr);
-                de->addElement(verts->size()-1);
-            }
-
-            vertptr = verts->size();
 
             prev_vec = this_vec;
         }
@@ -882,17 +914,28 @@ ExtrudeGeometryFilter::buildOutlineGeometry(const Structure&  structure,
         if ( !structure.isPolygon )
         {
             Faces::const_iterator last = e->faces.end()-1;
-            verts->push_back( last->right.roof );
-            if ( anchors && flatten  ) anchors->push_back(osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
-            if ( anchors && !flatten ) anchors->push_back(osg::Vec4f(x, y, vo + last->right.height, Clamping::ClampToGround));
-            de->addElement( verts->size()-1 );
-            verts->push_back( last->right.base );
-            if ( anchors ) anchors->push_back( osg::Vec4f(x, y, vo, Clamping::ClampToGround));
-            de->addElement( verts->size()-1 );
+
+            lines->pushVertex(last->right.roof);
+
+            if (anchors)
+            {
+                if (flatten)
+                    lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo, Clamping::ClampToAnchor));
+                else
+                    lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo + last->right.height, Clamping::ClampToGround));
+            }
+
+            lines->pushVertex(last->right.base);
+
+            if (anchors)
+                lines->pushVertexAttrib(anchors, osg::Vec4f(x, y, vo, Clamping::ClampToGround));
         }
     }
 
-    return true;
+    // finalize the line set
+    lines->dirty();
+
+    return lines->empty() ? 0L : lines.release();
 }
 
 void
@@ -904,12 +947,30 @@ ExtrudeGeometryFilter::addDrawable(osg::Drawable*       drawable,
 {
     // find the geode for the active stateset, creating a new one if necessary. NULL is a 
     // valid key as well.
-    osg::Geode* geode = _geodes[stateSet].get();
-    if ( !geode )
+    osg::Geode* geode;
+    
+    if (dynamic_cast<LineDrawable*>(drawable))
     {
-        geode = new osg::Geode();
-        geode->setStateSet( stateSet );
-        _geodes[stateSet] = geode;
+        geode = _lineGroups[stateSet].get();
+        if (!geode)
+        {
+            geode = new LineGroup();
+            if (stateSet)
+            {
+                geode->getOrCreateStateSet()->merge(*stateSet);
+            }
+            _lineGroups[stateSet] = geode;
+        }
+    }
+    else
+    {
+        geode = _geodes[stateSet].get();
+        if (!geode)
+        {
+            geode = new osg::Geode();
+            geode->setStateSet(stateSet);
+            _geodes[stateSet] = geode;
+        }
     }
 
     geode->addDrawable( drawable );
@@ -953,7 +1014,7 @@ ExtrudeGeometryFilter::process( FeatureList& features, FilterContext& context )
             
             osg::ref_ptr<osg::Geometry> rooflines = 0L;
             osg::ref_ptr<osg::Geometry> baselines = 0L;
-            osg::ref_ptr<osg::Geometry> outlines  = 0L;
+            osg::ref_ptr<osg::Drawable> outlines  = 0L;
             
             if ( part->getType() == Geometry::TYPE_POLYGON )
             {
@@ -961,12 +1022,6 @@ ExtrudeGeometryFilter::process( FeatureList& features, FilterContext& context )
 
                 // prep the shapes by making sure all polys are open:
                 static_cast<Polygon*>(part)->open();
-            }
-
-            // fire up the outline geometry if we have a line symbol.
-            if ( _outlineSymbol != 0L )
-            {
-                outlines = new osg::Geometry();
             }
 
             // make a base cap if we're doing stencil volumes.
@@ -1088,16 +1143,9 @@ ExtrudeGeometryFilter::process( FeatureList& features, FilterContext& context )
                 }
             }
 
-            if ( outlines.valid() )
+            if (_outlineSymbol.valid())
             {
-                osg::Vec4f outlineColor(1,1,1,1);
-                if ( _outlineSymbol.valid() )
-                {
-                    outlineColor = _outlineSymbol->stroke()->color();
-                }
-
-                float minCreaseAngle = _outlineSymbol->creaseAngle().value();
-                buildOutlineGeometry(structure, outlines.get(), outlineColor, minCreaseAngle);
+                outlines = buildOutlineGeometry(structure);
             }
 
             if ( baselines.valid() )
@@ -1131,7 +1179,7 @@ ExtrudeGeometryFilter::process( FeatureList& features, FilterContext& context )
                 addDrawable( baselines.get(), 0L, name, input, index );
             }
 
-            if ( outlines.valid() && outlines->getVertexArray() && outlines->getVertexArray()->getNumElements() > 0 )
+            if ( outlines.valid() )
             {
                 addDrawable( outlines.get(), 0L, name, input, index );
             }
@@ -1194,28 +1242,26 @@ ExtrudeGeometryFilter::push( FeatureList& input, FilterContext& context )
     // parent geometry with a delocalizer (if necessary)
     osg::Group* group = createDelocalizeGroup();
     
-    // add all the geodes
     for( SortedGeodeMap::iterator i = _geodes.begin(); i != _geodes.end(); ++i )
     {
         group->addChild( i->second.get() );
     }
     _geodes.clear();
 
+    for (SortedGeodeMap::iterator i = _lineGroups.begin(); i != _lineGroups.end(); ++i)
+    {
+        group->addChild(i->second.get());
+    }
+    _lineGroups.clear();
+
     if ( _mergeGeometry == true && _featureNameExpr.empty() )
     {
+        osg::ref_ptr<StateSetCache> cache = new StateSetCache();
+        cache->consolidateStateSets(group);
+
         osgUtil::Optimizer::MergeGeometryVisitor mg;
         mg.setTargetMaximumNumberOfVertices(65536);
         group->accept(mg);
-
-        // Because the mesh optimizers damaga line geometry.
-        if ( !_outlineSymbol.valid() )
-        {
-            osgUtil::Optimizer o;
-            o.optimize(group,
-                osgUtil::Optimizer::INDEX_MESH |
-                osgUtil::Optimizer::VERTEX_PRETRANSFORM |
-                osgUtil::Optimizer::VERTEX_POSTTRANSFORM );
-        }
     }
 
     // Prepare buffer objects.
@@ -1230,8 +1276,10 @@ ExtrudeGeometryFilter::push( FeatureList& input, FilterContext& context )
     {
         osg::StateSet* groupStateSet = group->getOrCreateStateSet();
         groupStateSet->setAttributeAndModes( new osg::PolygonOffset(1,1), 1 );
+#ifdef OSG_GL_FIXED_FUNCTION_AVAILABLE
         if ( _outlineSymbol->stroke()->width().isSet() )
             groupStateSet->setAttributeAndModes( new osg::LineWidth(*_outlineSymbol->stroke()->width()), 1 );
+#endif
     }
 
     return group;

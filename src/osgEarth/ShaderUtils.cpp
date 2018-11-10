@@ -18,16 +18,10 @@
  */
 #include <osgEarth/ShaderUtils>
 #include <osgEarth/ShaderFactory>
-#include <osgEarth/VirtualProgram>
 #include <osgEarth/Registry>
 #include <osgEarth/Capabilities>
 #include <osgEarth/CullingUtils>
-#include <osgEarth/URI>
 #include <osgEarth/GLSLChunker>
-#include <osg/ComputeBoundsVisitor>
-#include <osg/LightSource>
-#include <osgDB/FileUtils>
-#include <list>
 
 using namespace osgEarth;
 
@@ -43,68 +37,6 @@ namespace
 
 
     typedef std::list<const osg::StateSet*> StateSetStack;
-
-#if 0
-
-    static osg::StateAttribute::GLModeValue 
-    getModeValue(const StateSetStack& statesetStack, osg::StateAttribute::GLMode mode)
-    {
-        osg::StateAttribute::GLModeValue base_val = osg::StateAttribute::ON;
-
-        for(StateSetStack::const_iterator itr = statesetStack.begin();
-            itr != statesetStack.end();
-            ++itr)
-        {
-            osg::StateAttribute::GLModeValue val = (*itr)->getMode(mode);
-
-            if ( (val & osg::StateAttribute::INHERIT) == 0 )
-            {
-
-                if ((val & osg::StateAttribute::PROTECTED)!=0 ||
-                    (base_val & osg::StateAttribute::OVERRIDE)==0)
-                {
-                    base_val = val;
-                }
-            }
-        }
-        return base_val;
-    }
-#endif
-    
-#if 0
-    static const osg::Light*
-    getLightByID(const StateSetStack& statesetStack, int id)
-    {
-        const osg::Light* base_light = NULL;
-        osg::StateAttribute::GLModeValue base_val = osg::StateAttribute::ON;
-        
-        for(StateSetStack::const_iterator itr = statesetStack.begin();
-            itr != statesetStack.end();
-            ++itr)
-        {
-            
-            osg::StateAttribute::GLModeValue val = (*itr)->getMode(GL_LIGHT0+id);
-
-            //if ( (val & osg::StateAttribute::INHERIT) == 0 )
-            {
-            //    if ((val & osg::StateAttribute::PROTECTED)!=0 ||
-            //        (base_val & osg::StateAttribute::OVERRIDE)==0)
-                {
-                    base_val = val;
-                    const osg::StateAttribute* lightAtt = (*itr)->getAttribute(osg::StateAttribute::LIGHT, id);
-                    if(lightAtt){
-                        const osg::Light* asLight = dynamic_cast<const osg::Light*>(lightAtt);
-                        if(val){
-                            base_light = asLight;
-                        }
-                    }
-                }
-            }
-            
-        }
-        return base_light;
-    }
-#endif
     
     static const osg::Material*
     getFrontMaterial(const StateSetStack& statesetStack)
@@ -204,7 +136,7 @@ namespace
             if ( !tokens[i].empty() )
             {
                 int len = tokens[i].length();
-                if ( tokens[i].at(len-1) == ';' )
+                if ( tokens[i][len-1] == ';' )
                     buf << " " << tokens[i].substr(0, len-1); // strip semicolon
                 else
                     buf << " " << tokens[i];
@@ -261,7 +193,7 @@ namespace
 
     void applySupportForNoFFPImpl(GLSLChunker::Chunks& chunks)
     {
-#if !defined(OSG_GL_FIXED_FUNCTION_AVAILABLE)
+#if !defined(OSG_GL_FIXED_FUNCTION_AVAILABLE) && !defined(OSG_GLES3_AVAILABLE) //osg state convertVertexShaderSourceToOsgBuiltIns inserts these and the double declaration is causing an error in gles
 
         // for geometry and tessellation shaders, replace the built-ins with 
         // osg uniform aliases.
@@ -276,7 +208,8 @@ namespace
 
         for (GLSLChunker::Chunks::iterator chunk = chunks.begin(); chunk != chunks.end(); ++chunk)
         {
-            if (chunk->type != GLSLChunker::Chunk::TYPE_DIRECTIVE)
+            if (chunk->type != GLSLChunker::Chunk::TYPE_DIRECTIVE ||
+                (chunk->tokens.size()>0 && chunk->tokens[0].compare(0, 3, "#if")==0))
             {
                 for (unsigned line = 0; line < 4; ++line) {
                     chunk = chunks.insert(chunk, chunker.chunkLine(lines[line]));
@@ -295,6 +228,7 @@ namespace
     }
 }
 
+#if 0
 void
 ShaderPreProcessor::applySupportForNoFFP(osg::Shader* shader)
 {
@@ -315,6 +249,7 @@ ShaderPreProcessor::applySupportForNoFFP(osg::Shader* shader)
 
 #endif // !defined(OSG_GL_FIXED_FUNCTION_AVAILABLE)
 }
+#endif
 
 void
 ShaderPreProcessor::run(osg::Shader* shader)
@@ -337,7 +272,11 @@ ShaderPreProcessor::run(osg::Shader* shader)
         GLSLChunker::Chunks chunks;
         chunker.read( source, chunks );
 
-        applySupportForNoFFPImpl(chunks);
+
+        if (shader->getType() != osg::Shader::FRAGMENT)
+        {
+            //applySupportForNoFFPImpl(chunks);
+        }
 
         // Replace varyings with directives that the ShaderFactory can interpret
         // when creating interface blocks.
@@ -603,8 +542,11 @@ DiscardAlphaFragments::install(osg::StateSet* ss, float minAlpha) const
         VirtualProgram* vp = VirtualProgram::getOrCreate(ss);
         if ( vp )
         {
+            vp->setName("Discard Alpha");
+
             std::string code = Stringify()
-                << "#version " GLSL_VERSION_STR "\n"
+                << "#version " << GLSL_VERSION_STR << "\n"
+                << GLSL_DEFAULT_PRECISION_FLOAT << "\n"
                 << "void oe_discardalpha_frag(inout vec4 color) { \n"
                 << "    if ( color.a < " << std::setprecision(1) << minAlpha << ") discard;\n"
                 << "} \n";

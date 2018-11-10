@@ -98,6 +98,9 @@ namespace osgEarth { namespace Symbology
         optional<unsigned short>& stipple() { return _stipplePattern; }
         const optional<unsigned short>& stipple() const { return _stipplePattern; }
 
+        /** Smoothing/antialiasing */
+        optional<bool>& smooth() { return _smooth; }
+        const optional<bool>& smooth() const { return _smooth; }
 
         /** Rounding ratio - when rounding corners/caps, this is the ratio
             of rounded-segment length to width(). The smaller this value,
@@ -119,10 +122,13 @@ namespace osgEarth { namespace Symbology
         optional<unsigned short> _stipplePattern;
         optional<float>          _roundingRatio;
         optional<float>          _minPixels;
+        optional<bool>           _smooth;
 
         void init();
     };
 
 } } // namespace osgEarth::Symbology
+
+OSGEARTH_SPECIALIZE_CONFIG(osgEarth::Symbology::Stroke);
 
 #endif // OSGEARTHSYMBOLOGY_STROKE_H

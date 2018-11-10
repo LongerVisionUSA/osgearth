@@ -18,8 +18,6 @@
  */
 #include <osgEarth/Extension>
 #include <osgEarth/Registry>
-#include <osgDB/Registry>
-#include <osgDB/ReadFile>
 
 using namespace osgEarth;
 
@@ -31,6 +29,7 @@ using namespace osgEarth;
 Extension::Extension()
 {
     //nop
+    _defaultOptions = Config("extension");
 }
 
 const ConfigOptions&

@@ -17,8 +17,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 #include <osgEarth/ElevationQuery>
-#include <osgEarth/DPLineSegmentIntersector>
-#include <osgUtil/IntersectionVisitor>
+#include <osgEarth/Map>
 #include <osgSim/LineOfSight>
 
 #define LC "[ElevationQuery] "
@@ -28,7 +27,6 @@ using namespace osgEarth;
 
 ElevationQuery::ElevationQuery()
 {
-    reset();
 }
 
 ElevationQuery::ElevationQuery(const Map* map)
@@ -36,23 +34,10 @@ ElevationQuery::ElevationQuery(const Map* map)
     setMap(map);
 }
 
-ElevationQuery::ElevationQuery(const MapFrame& mapFrame)
-{
-    setMapFrame(mapFrame);
-}
-
 void
 ElevationQuery::setMap(const Map* map)
 {
-    _mapf = MapFrame(map, (Map::ModelParts)(Map::TERRAIN_LAYERS | Map::MODEL_LAYERS));
-    reset();
-}
-
-void
-ElevationQuery::setMapFrame(const MapFrame& frame)
-{
-    _mapf = frame;
-    reset();
+    _map = map;
 }
 
 void
@@ -61,34 +46,60 @@ ElevationQuery::reset()
     // set read callback for IntersectionVisitor
     _ivrc = new osgSim::DatabaseCacheReadCallback();
 
-    // find terrain patch layers.
-    gatherPatchLayers();
+    _terrainModelLayers.clear();
+    _elevationLayers.clear();
+
+    osg::ref_ptr<const Map> map;
+    if (_map.lock(map))
+    {
+        map->getLayers(_elevationLayers);
+        
+        // cache a vector of terrain patch models.
+        LayerVector layers;
+        map->getLayers(layers);
+        for (LayerVector::const_iterator i = layers.begin(); i != layers.end(); ++i)
+        {
+            if (i->get()->options().terrainPatch() == true)
+            {
+                _terrainModelLayers.push_back(i->get());
+            }
+        }
+
+        // revisions are now in sync.
+        _mapRevision = map->getDataModelRevision();
+    }
 
     // clear any active envelope
     _envelope = 0L;
 }
-
 void
 ElevationQuery::sync()
 {
-    if ( _mapf.needsSync() )
+    osg::ref_ptr<const Map> map;
+    if (_map.lock(map))
     {
-        _mapf.sync();
-        reset();
+        if (_mapRevision != map->getDataModelRevision())
+        {
+            reset();
+        }
     }
 }
 
 void
-ElevationQuery::gatherPatchLayers()
+ElevationQuery::gatherTerrainModelLayers(const Map* map)
 {
     // cache a vector of terrain patch models.
-    _patchLayers.clear();
-    for(ModelLayerVector::const_iterator i = _mapf.modelLayers().begin();
-        i != _mapf.modelLayers().end();
+    _terrainModelLayers.clear();
+    LayerVector layers;
+    map->getLayers(layers);
+    for (LayerVector::const_iterator i = layers.begin();
+        i != layers.end();
         ++i)
     {
-        if ( i->get()->isTerrainPatch() )
-            _patchLayers.push_back( i->get() );
+        if (i->get()->options().terrainPatch() == true)
+        {
+            _terrainModelLayers.push_back(i->get());
+        }
     }
 }
 
@@ -126,8 +137,13 @@ ElevationQuery::getElevations(std::vector<osg::Vec3d>& points,
         float elevation;
         double z = (*i).z();
         GeoPoint p(pointsSRS, *i, ALTMODE_ABSOLUTE);
-        if ( getElevationImpl(p, elevation, desiredResolution, 0L) )
+        if ( getElevationImpl(p, elevation, desiredResolution, 0L))
         {
+            if (elevation == NO_DATA_VALUE)
+            {
+                elevation = 0.0;
+            }
+
             (*i).z() = ignoreZ ? elevation : elevation + z;
         }
     }
@@ -174,17 +190,18 @@ ElevationQuery::getElevationImpl(const GeoPoint& point,
     osg::Timer_t begin = osg::Timer::instance()->tick();
 
     // first try the terrain patches.
-    if ( _patchLayers.size() > 0 )
+    if ( _terrainModelLayers.size() > 0 )
     {
         osgUtil::IntersectionVisitor iv;
 
         if ( _ivrc.valid() )
             iv.setReadCallback(_ivrc.get());
 
-        for(std::vector<ModelLayer*>::iterator i = _patchLayers.begin(); i != _patchLayers.end(); ++i)
+        for(LayerVector::iterator i = _terrainModelLayers.begin(); i != _terrainModelLayers.end(); ++i)
         {
             // find the scene graph for this layer:
-            osg::Node* node = (*i)->getSceneGraph( _mapf.getUID() );
+            Layer* layer = i->get();
+            osg::Node* node = layer->getNode();
             if ( node )
             {
                 // configure for intersection:
@@ -201,26 +218,26 @@ ElevationQuery::getElevationImpl(const GeoPoint& point,
                     osg::Vec3d end  ( surface - nvector*5e5 );
 
                     // first time through, set up the intersector on demand
-                    if ( !_patchLayersLSI.valid() )
+                    if ( !_lsi.valid() )
                     {
-                        _patchLayersLSI = new DPLineSegmentIntersector(start, end);
-                        _patchLayersLSI->setIntersectionLimit( _patchLayersLSI->LIMIT_NEAREST );
+                        _lsi = new osgUtil::LineSegmentIntersector(start, end);
+                        _lsi->setIntersectionLimit( _lsi->LIMIT_NEAREST );
                     }
                     else
                     {
-                        _patchLayersLSI->reset();
-                        _patchLayersLSI->setStart( start );
-                        _patchLayersLSI->setEnd  ( end );
+                        _lsi->reset();
+                        _lsi->setStart( start );
+                        _lsi->setEnd  ( end );
                     }
 
                     // try it.
-                    iv.setIntersector( _patchLayersLSI.get() );
+                    iv.setIntersector( _lsi.get() );
                     node->accept( iv );
 
                     // check for a result!!
-                    if ( _patchLayersLSI->containsIntersections() )
+                    if ( _lsi->containsIntersections() )
                     {
-                        osg::Vec3d isect = _patchLayersLSI->getIntersections().begin()->getWorldIntersectPoint();
+                        osg::Vec3d isect = _lsi->getIntersections().begin()->getWorldIntersectPoint();
 
                         // transform back to input SRS:
                         GeoPoint output;
@@ -238,14 +255,21 @@ ElevationQuery::getElevationImpl(const GeoPoint& point,
                 }
             }
         }
-    }
+    } 
 
-    if ( _mapf.elevationLayers().empty() )
+    if (_elevationLayers.empty())
     {
         // this means there are no heightfields.
-        out_elevation = 0.0;
+        out_elevation = NO_DATA_VALUE;
         return true;
     }
+
+    // secure map pointer:
+    osg::ref_ptr<const Map> map;
+    if (!_map.lock(map))
+    {
+        return false;
+    }    
 
     // tile size (resolution of elevation tiles)
     unsigned tileSize = 257; // yes?
@@ -256,7 +280,7 @@ ElevationQuery::getElevationImpl(const GeoPoint& point,
     // attempt to map the requested resolution to an LOD:
     if (desiredResolution > 0.0)
     {
-        int level = _mapf.getProfile()->getLevelOfDetailForHorizResolution(desiredResolution, tileSize);
+        int level = map->getProfile()->getLevelOfDetailForHorizResolution(desiredResolution, tileSize);
         if ( level > 0 )
             lod = level;
     }
@@ -265,8 +289,8 @@ ElevationQuery::getElevationImpl(const GeoPoint& point,
     if (!_envelope.valid() ||
         !point.getSRS()->isHorizEquivalentTo(_envelope->getSRS()) ||
         lod != _envelope->getLOD())
-    {
-        _envelope = _mapf.getElevationPool()->createEnvelope(point.getSRS(), lod);
+    {        
+        _envelope = map->getElevationPool()->createEnvelope(point.getSRS(), lod);
     }
 
     // sample the elevation, and if requested, the resolution as well:

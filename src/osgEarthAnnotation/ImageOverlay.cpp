@@ -23,16 +23,11 @@
 #include <osgEarthAnnotation/AnnotationRegistry>
 #include <osgEarthSymbology/MeshSubdivider>
 #include <osgEarthFeatures/GeometryUtils>
-#include <osgEarth/GeometryClamper>
-#include <osgEarthFeatures/Feature>
 #include <osgEarth/MapNode>
 #include <osgEarth/NodeUtils>
 #include <osgEarth/ImageUtils>
 #include <osgEarth/DrapeableNode>
 #include <osgEarth/VirtualProgram>
-#include <osgEarth/Registry>
-#include <osgEarth/Capabilities>
-#include <osgEarth/ShaderGenerator>
 #include <osg/Geode>
 #include <osg/ShapeDrawable>
 #include <osg/Texture2D>
@@ -54,17 +49,37 @@ namespace
     void clampLatitude(osg::Vec2d& l)
     {
         l.y() = osg::clampBetween( l.y(), -90.0, 90.0);
-    }
+    }    
 
     static Distance default_geometryResolution(5.0, Units::DEGREES);
+
+    const char* imageVS =
+        "#version " GLSL_VERSION_STR "\n"
+        "out vec2 oe_ImageOverlay_texcoord; \n"
+        "void oe_ImageOverlay_VS(inout vec4 vertex) { \n"
+        "    oe_ImageOverlay_texcoord = gl_MultiTexCoord0.st; \n"
+        "} \n";
+
+    const char* imageFS =
+        "#version " GLSL_VERSION_STR "\n"
+        "in vec2 oe_ImageOverlay_texcoord; \n"
+        "uniform sampler2D oe_ImageOverlay_tex; \n"
+        "uniform float oe_ImageOverlay_alpha; \n"
+        "void oe_ImageOverlay_FS(inout vec4 color) { \n"
+        "    color = texture(oe_ImageOverlay_tex, oe_ImageOverlay_texcoord);\n"
+        "    color.a *= oe_ImageOverlay_alpha; \n"
+        "} \n";
+
 }
 
 //---------------------------------------------------------------------------
 
 OSGEARTH_REGISTER_ANNOTATION( imageoverlay, osgEarth::Annotation::ImageOverlay );
 
-ImageOverlay::ImageOverlay(MapNode* mapNode, const Config& conf, const osgDB::Options* dbOptions) :
-AnnotationNode(conf),
+osg::ref_ptr<VirtualProgram> ImageOverlay::_program;
+
+ImageOverlay::ImageOverlay(const Config& conf, const osgDB::Options* readOptions) :
+AnnotationNode(conf, readOptions),
 _lowerLeft    (10, 10),
 _lowerRight   (20, 10),
 _upperRight   (20, 20),
@@ -74,15 +89,18 @@ _alpha        (1.0f),
 _minFilter    (osg::Texture::LINEAR_MIPMAP_LINEAR),
 _magFilter    (osg::Texture::LINEAR),
 _texture      (0),
-_geometryResolution(default_geometryResolution)
+_geometryResolution(default_geometryResolution),
+_draped(true)
 {
-    conf.getIfSet( "url",   _imageURI );
+    construct();
+
+    conf.get( "url",   _imageURI );
     if ( _imageURI.isSet() )
     {
-        setImage( _imageURI->getImage(dbOptions) );
+        setImage( _imageURI->getImage(readOptions) );
     }
 
-    conf.getIfSet( "alpha", _alpha );
+    conf.get( "alpha", _alpha );
     
     osg::ref_ptr<Geometry> geom;
     if ( conf.hasChild("geometry") )
@@ -105,18 +123,20 @@ _geometryResolution(default_geometryResolution)
 
 
     //Load the filter settings
-    conf.getIfSet("mag_filter","LINEAR",                _magFilter,osg::Texture::LINEAR);
-    conf.getIfSet("mag_filter","LINEAR_MIPMAP_LINEAR",  _magFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
-    conf.getIfSet("mag_filter","LINEAR_MIPMAP_NEAREST", _magFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
-    conf.getIfSet("mag_filter","NEAREST",               _magFilter,osg::Texture::NEAREST);
-    conf.getIfSet("mag_filter","NEAREST_MIPMAP_LINEAR", _magFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
-    conf.getIfSet("mag_filter","NEAREST_MIPMAP_NEAREST",_magFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
-    conf.getIfSet("min_filter","LINEAR",                _minFilter,osg::Texture::LINEAR);
-    conf.getIfSet("min_filter","LINEAR_MIPMAP_LINEAR",  _minFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
-    conf.getIfSet("min_filter","LINEAR_MIPMAP_NEAREST", _minFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
-    conf.getIfSet("min_filter","NEAREST",               _minFilter,osg::Texture::NEAREST);
-    conf.getIfSet("min_filter","NEAREST_MIPMAP_LINEAR", _minFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
-    conf.getIfSet("min_filter","NEAREST_MIPMAP_NEAREST",_minFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
+    conf.get("mag_filter","LINEAR",                _magFilter,osg::Texture::LINEAR);
+    conf.get("mag_filter","LINEAR_MIPMAP_LINEAR",  _magFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
+    conf.get("mag_filter","LINEAR_MIPMAP_NEAREST", _magFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
+    conf.get("mag_filter","NEAREST",               _magFilter,osg::Texture::NEAREST);
+    conf.get("mag_filter","NEAREST_MIPMAP_LINEAR", _magFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
+    conf.get("mag_filter","NEAREST_MIPMAP_NEAREST",_magFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
+    conf.get("min_filter","LINEAR",                _minFilter,osg::Texture::LINEAR);
+    conf.get("min_filter","LINEAR_MIPMAP_LINEAR",  _minFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
+    conf.get("min_filter","LINEAR_MIPMAP_NEAREST", _minFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
+    conf.get("min_filter","NEAREST",               _minFilter,osg::Texture::NEAREST);
+    conf.get("min_filter","NEAREST_MIPMAP_LINEAR", _minFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
+    conf.get("min_filter","NEAREST_MIPMAP_NEAREST",_minFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
+
+    conf.get("draped", _draped);
 
     if (conf.hasValue("geometry_resolution"))
     {
@@ -125,8 +145,8 @@ _geometryResolution(default_geometryResolution)
             _geometryResolution.set(value, units);
     }
 
-    postCTOR();
-    ImageOverlay::setMapNode( mapNode );
+    compile();
+    //ImageOverlay::setMapNode( mapNode );
 }
 
 Config
@@ -137,16 +157,16 @@ ImageOverlay::getConfig() const
 
     if ( _imageURI.isSet() )
     {
-        conf.addIfSet("url", _imageURI );
+        conf.set("url", _imageURI );
     }
     else if ( _image.valid() && !_image->getFileName().empty() )
     {
         optional<URI> temp;
         temp = URI(_image->getFileName());
-        conf.addIfSet("url", temp);
+        conf.set("url", temp);
     }
 
-    conf.addIfSet("alpha", _alpha);
+    conf.set("alpha", _alpha);
 
     osg::ref_ptr<Geometry> g = new Polygon();
     g->push_back( osg::Vec3d(_lowerLeft.x(),  _lowerLeft.y(), 0) );
@@ -159,22 +179,24 @@ ImageOverlay::getConfig() const
     conf.add( geomConf );
 
     //Save the filter settings
-	conf.updateIfSet("mag_filter","LINEAR",                _magFilter,osg::Texture::LINEAR);
-    conf.updateIfSet("mag_filter","LINEAR_MIPMAP_LINEAR",  _magFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
-    conf.updateIfSet("mag_filter","LINEAR_MIPMAP_NEAREST", _magFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
-    conf.updateIfSet("mag_filter","NEAREST",               _magFilter,osg::Texture::NEAREST);
-    conf.updateIfSet("mag_filter","NEAREST_MIPMAP_LINEAR", _magFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
-    conf.updateIfSet("mag_filter","NEAREST_MIPMAP_NEAREST",_magFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
-    conf.updateIfSet("min_filter","LINEAR",                _minFilter,osg::Texture::LINEAR);
-    conf.updateIfSet("min_filter","LINEAR_MIPMAP_LINEAR",  _minFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
-    conf.updateIfSet("min_filter","LINEAR_MIPMAP_NEAREST", _minFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
-    conf.updateIfSet("min_filter","NEAREST",               _minFilter,osg::Texture::NEAREST);
-    conf.updateIfSet("min_filter","NEAREST_MIPMAP_LINEAR", _minFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
-    conf.updateIfSet("min_filter","NEAREST_MIPMAP_NEAREST",_minFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
+	conf.set("mag_filter","LINEAR",                _magFilter,osg::Texture::LINEAR);
+    conf.set("mag_filter","LINEAR_MIPMAP_LINEAR",  _magFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
+    conf.set("mag_filter","LINEAR_MIPMAP_NEAREST", _magFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
+    conf.set("mag_filter","NEAREST",               _magFilter,osg::Texture::NEAREST);
+    conf.set("mag_filter","NEAREST_MIPMAP_LINEAR", _magFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
+    conf.set("mag_filter","NEAREST_MIPMAP_NEAREST",_magFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
+    conf.set("min_filter","LINEAR",                _minFilter,osg::Texture::LINEAR);
+    conf.set("min_filter","LINEAR_MIPMAP_LINEAR",  _minFilter,osg::Texture::LINEAR_MIPMAP_LINEAR);
+    conf.set("min_filter","LINEAR_MIPMAP_NEAREST", _minFilter,osg::Texture::LINEAR_MIPMAP_NEAREST);
+    conf.set("min_filter","NEAREST",               _minFilter,osg::Texture::NEAREST);
+    conf.set("min_filter","NEAREST_MIPMAP_LINEAR", _minFilter,osg::Texture::NEAREST_MIPMAP_LINEAR);
+    conf.set("min_filter","NEAREST_MIPMAP_NEAREST",_minFilter,osg::Texture::NEAREST_MIPMAP_NEAREST);
+
+    conf.set("draped", _draped);
 
     if (_geometryResolution != default_geometryResolution)
     {
-        conf.update("geometry_resolution", _geometryResolution.asParseableString());
+        conf.set("geometry_resolution", _geometryResolution.asParseableString());
     }
 
     return conf;
@@ -195,146 +217,119 @@ _alpha        (1.0f),
 _minFilter    (osg::Texture::LINEAR_MIPMAP_LINEAR),
 _magFilter    (osg::Texture::LINEAR),
 _texture      (0),
-_geometryResolution(default_geometryResolution)
+_geometryResolution(default_geometryResolution),
+_draped(true)
 {        
-    postCTOR();
+    construct();
+
     ImageOverlay::setMapNode(mapNode);
+
+    compile();
 }
 
 void
-ImageOverlay::postCTOR()
+ImageOverlay::construct()
 {
-    _geode = new osg::Geode;
-
-    _transform = new osg::MatrixTransform;
-    _transform->addChild( _geode );
+    _updateScheduled = false;
 
     // place the geometry under a drapeable node so it will project onto the terrain    
-    DrapeableNode* d = new DrapeableNode(); // getMapNode() );
+    DrapeableNode* d = new DrapeableNode();
+    d->setDrapingEnabled(*_draped);
     addChild( d );
+    
+    if (!_program.valid())
+    {
+        static Threading::Mutex mutex;
+        mutex.lock();
+        if (_program.valid() == false)
+        {
+            _program = new VirtualProgram;
+            _program->setInheritShaders(true);
+            _program->setFunction("oe_ImageOverlay_VS", imageVS, ShaderComp::LOCATION_VERTEX_MODEL);
+            _program->setFunction("oe_ImageOverlay_FS", imageFS, ShaderComp::LOCATION_FRAGMENT_COLORING);
+        }
+        mutex.unlock();
+    }
 
-    d->addChild( _transform );
+    _root = new osg::Group();
+    osg::StateSet *ss = _root->getOrCreateStateSet();
+    ss->setAttributeAndModes(_program.get(), osg::StateAttribute::ON);
+    ss->addUniform(new osg::Uniform("oe_ImageOverlay_tex", 0));
+    ss->addUniform(new osg::Uniform("oe_ImageOverlay_alpha", *_alpha));
+    ss->setMode(GL_DEPTH_TEST, osg::StateAttribute::OFF);
+    d->addChild( _root );
 
-    init();
-
-    ADJUST_UPDATE_TRAV_COUNT( this, 1 );
+    ADJUST_EVENT_TRAV_COUNT(this, 1);
 }
 
 void
-ImageOverlay::init()
+ImageOverlay::compile()
 {
     OpenThreads::ScopedLock< OpenThreads::Mutex > lock(_mutex);
 
-    _geode->removeDrawables(0, _geode->getNumDrawables() );
-
-    if ( !_clampCallback.valid() )
+    if (_root->getNumChildren() > 0)
     {
-        _clampCallback = new TerrainCallbackAdapter<ImageOverlay>(this);
+        _root->removeChildren(0, _root->getNumChildren());
     }
 
     if ( getMapNode() )
-    {
-        osg::Geometry* geometry = new osg::Geometry();
-        geometry->setUseVertexBufferObjects(true);
-
+    {                
         const SpatialReference* mapSRS = getMapNode()->getMapSRS();
 
-        // calculate a bounding polytope in world space (for mesh clamping):
         osg::ref_ptr<Feature> f = new Feature( new Polygon(), mapSRS->getGeodeticSRS() );
         Geometry* g = f->getGeometry();
         g->push_back( osg::Vec3d(_lowerLeft.x(),  _lowerLeft.y(), 0) );
         g->push_back( osg::Vec3d(_lowerRight.x(), _lowerRight.y(), 0) );
         g->push_back( osg::Vec3d(_upperRight.x(), _upperRight.y(), 0) );
         g->push_back( osg::Vec3d(_upperLeft.x(),  _upperLeft.y(),  0) );
-        
-        f->getWorldBoundingPolytope( getMapNode()->getMapSRS(), _boundingPolytope );
 
-        // next, convert to world coords and create the geometry:
-        osg::Vec3Array* verts = new osg::Vec3Array();
-        verts->reserve(4);
-        osg::Vec3d anchor;
-        for( Geometry::iterator i = g->begin(); i != g->end(); ++i )
-        {        
-            osg::Vec3d map, world;        
-            f->getSRS()->transform( *i, mapSRS, map);
-            mapSRS->transformToWorld( map, world );
-            if (i == g->begin())
+        osgEarth::Bounds bounds = getBounds();
+
+        FeatureList features;
+        if (!mapSRS->isGeographic())        
+        {
+            f->splitAcrossDateLine(features);
+        }
+        // The width of the image overlay is >= 180 degrees so split it into two chunks of < 180 degrees
+        // so the MeshSubdivider will work.
+        else if (bounds.width() > 180.0)
+        {
+            Bounds boundsA(bounds.xMin(), bounds.yMin(), bounds.xMin() + 180.0, bounds.yMax());
+            Bounds boundsB(bounds.xMin() + 180.0, bounds.yMin(), bounds.xMax(), bounds.yMax());
+            
+            osg::ref_ptr< Geometry > geomA;
+            if (f->getGeometry()->crop(boundsA, geomA))
             {
-                anchor = world;
+                osg::ref_ptr< Feature > croppedFeature = new Feature(*f);
+                // Make sure the feature is wound correctly.
+                geomA->rewind(osgEarth::Symbology::Geometry::ORIENTATION_CCW);
+                croppedFeature->setGeometry(geomA.get());
+                features.push_back(croppedFeature);
             }
-            verts->push_back( world - anchor );
+            osg::ref_ptr< Geometry > geomB;
+            if (f->getGeometry()->crop(boundsB, geomB))
+            {
+                osg::ref_ptr< Feature > croppedFeature = new Feature(*f);
+                // Make sure the feature is wound correctly.
+                geomA->rewind(osgEarth::Symbology::Geometry::ORIENTATION_CCW);
+                croppedFeature->setGeometry(geomB.get());
+                features.push_back(croppedFeature);
+            }
         }
-        
-        _transform->setMatrix( osg::Matrixd::translate( anchor ) );
-
-
-
-        geometry->setVertexArray( verts );
-        if ( verts->getVertexBufferObject() )
-            verts->getVertexBufferObject()->setUsage(GL_STATIC_DRAW_ARB);
-
-        osg::Vec4Array* colors = new osg::Vec4Array(1);
-        (*colors)[0] = osg::Vec4(1,1,1,*_alpha);
-
-        geometry->setColorArray( colors );
-        geometry->setColorBinding( osg::Geometry::BIND_OVERALL );
-
-         GLushort tris[6] = { 0, 1, 2,
-                            0, 2, 3
-                          };        
-        geometry->addPrimitiveSet(new osg::DrawElementsUShort( GL_TRIANGLES, 6, tris ) );
-
-        bool flip = false;
-        if (_image.valid())
+        else
         {
-            //Create the texture
-            _texture = new osg::Texture2D(_image.get());     
-            _texture->setWrap(_texture->WRAP_S, _texture->CLAMP_TO_EDGE);
-            _texture->setWrap(_texture->WRAP_T, _texture->CLAMP_TO_EDGE);
-            _texture->setResizeNonPowerOfTwoHint(false);
-            updateFilters();
-            _geode->getOrCreateStateSet()->setTextureAttributeAndModes(0, _texture, osg::StateAttribute::ON);    
-            flip = _image->getOrigin()==osg::Image::TOP_LEFT;
+            features.push_back( f );
         }
 
-        osg::Vec2Array* texcoords = new osg::Vec2Array(4);
-        (*texcoords)[0].set(0.0f,flip ? 1.0 : 0.0f);
-        (*texcoords)[1].set(1.0f,flip ? 1.0 : 0.0f);
-        (*texcoords)[2].set(1.0f,flip ? 0.0 : 1.0f);
-        (*texcoords)[3].set(0.0f,flip ? 0.0 : 1.0f);
-        geometry->setTexCoordArray(0, texcoords);
-
-         
-        //Only run the MeshSubdivider on geocentric maps
-        if (getMapNode()->getMap()->isGeocentric())
+        for (FeatureList::iterator itr = features.begin(); itr != features.end(); ++itr)
         {
-            MeshSubdivider ms(osg::Matrixd::inverse(_transform->getMatrix()), _transform->getMatrix());
-            ms.run(*geometry, _geometryResolution.as(Units::RADIANS), GEOINTERP_RHUMB_LINE);
+            _root->addChild(createNode(itr->get(), features.size() > 1));
         }
-
-        _geode->addDrawable( geometry );
-
-        _geometry = geometry;
 
         _dirty = false;
-        
-        // Set the annotation up for auto-clamping. We always need to auto-clamp a draped image
-        // so that the mesh roughly conforms with the surface, otherwise the draping routine
-        // might clip it.
-        Style style;
-        style.getOrCreate<AltitudeSymbol>()->clamping() = AltitudeSymbol::CLAMP_RELATIVE_TO_TERRAIN;
-        applyStyle( style );
-        setLightingIfNotSet( false );
-        //clampMesh( getMapNode()->getTerrain()->getGraph() );
 
-        if ( Registry::capabilities().supportsGLSL() )
-        {
-            //OE_WARN << LC << "ShaderGen RUNNING" << std::endl;
-            Registry::shaderGenerator().run( _geode, "osgEarth.ImageOverlay" );
-        }
-
-        getMapNode()->getTerrain()->addTerrainCallback( _clampCallback.get() );
-        clamp( getMapNode()->getTerrain(), getMapNode()->getTerrain()->getGraph() );
+        // image overlay is unlit by default.
+        setDefaultLighting(false);
     }
 }
 
@@ -344,7 +339,7 @@ ImageOverlay::setMapNode( MapNode* mapNode )
     if ( getMapNode() != mapNode )
     {
         AnnotationNode::setMapNode( mapNode );
-        init();
+        compile();
     }
 }
 
@@ -357,6 +352,7 @@ ImageOverlay::getDraped() const
 void
 ImageOverlay::setDraped( bool draped )
 {
+    _draped = draped;
     static_cast< DrapeableNode *>( getChild(0))->setDrapingEnabled( draped );
 }
 
@@ -401,6 +397,107 @@ ImageOverlay::setMagFilter( osg::Texture::FilterMode filter )
     updateFilters();
 }
 
+osg::Node* ImageOverlay::createNode(Feature* feature, bool split)
+{    
+    const SpatialReference* mapSRS = getMapNode()->getMapSRS();
+
+    osg::MatrixTransform* transform = new osg::MatrixTransform;
+    
+    //osg::Geode* geode = new osg::Geode;
+    //transform->addChild(geode);
+
+    osg::Geometry* geometry = new osg::Geometry();     
+    geometry->setUseVertexBufferObjects(true);
+    transform->addChild(geometry);
+
+    // next, convert to world coords and create the geometry:
+    osg::Vec3Array* verts = new osg::Vec3Array();
+    verts->reserve(4);
+    osg::Vec3d anchor;
+    for( Geometry::iterator i = feature->getGeometry()->begin(); i != feature->getGeometry()->end(); ++i )
+    {        
+        osg::Vec3d map, world;        
+        feature->getSRS()->transform( *i, mapSRS, map);
+        mapSRS->transformToWorld( map, world );
+        if (i == feature->getGeometry()->begin())
+        {
+            anchor = world;
+        }
+        verts->push_back( world - anchor );
+    }    
+
+    transform->setMatrix( osg::Matrixd::translate( anchor ) );
+
+    geometry->setVertexArray( verts );
+    if ( verts->getVertexBufferObject() )
+        verts->getVertexBufferObject()->setUsage(GL_STATIC_DRAW_ARB);
+
+    GLushort tris[6] = { 0, 1, 2,
+        0, 2, 3
+    };        
+    geometry->addPrimitiveSet(new osg::DrawElementsUShort( GL_TRIANGLES, 6, tris ) );
+
+    bool flip = false;
+    if (_image.valid())
+    {
+        //Create the texture
+        _texture = new osg::Texture2D(_image.get());     
+        _texture->setWrap(_texture->WRAP_S, _texture->CLAMP_TO_EDGE);
+        _texture->setWrap(_texture->WRAP_T, _texture->CLAMP_TO_EDGE);
+        _texture->setResizeNonPowerOfTwoHint(false);
+        updateFilters();
+        transform->getOrCreateStateSet()->setTextureAttributeAndModes(0, _texture, osg::StateAttribute::ON);    
+        flip = _image->getOrigin()==osg::Image::TOP_LEFT;
+    }
+
+    osg::Vec2Array* texcoords = new osg::Vec2Array(4);
+
+
+
+    if (split)
+    {
+        // If the feature has been split across the antimerdian we have to figure out new texture coordinates, we can't just just use the corners.
+        // This code is limited in that it only works with rectangular images though, so overlays that are non axis aligned and split across the antimerdian could look wrong
+        double width = _upperRight.x() - _lowerLeft.x();
+        double height = _upperRight.y() - _lowerLeft.y();
+
+        for (unsigned int i = 0; i < feature->getGeometry()->size(); ++i)
+        {
+            osg::Vec3d v = (*feature->getGeometry())[i];
+
+            if (v.x() < _lowerLeft.x())
+            {
+                v.x() += 360.0;
+            }
+            if (v.x() > _upperRight.x())
+            {
+                v.x() -= 360.0;
+            }
+
+            float s = (v.x() - _lowerLeft.x()) / width;
+            float t = (v.y() - _lowerLeft.y()) / height;
+            (*texcoords)[i].set(s, flip ? 1.0f - t : t);
+        }
+    }
+    else
+    {
+        (*texcoords)[0].set(0.0f, flip ? 1.0 : 0.0f);
+        (*texcoords)[1].set(1.0f, flip ? 1.0 : 0.0f);
+        (*texcoords)[2].set(1.0f, flip ? 0.0 : 1.0f);
+        (*texcoords)[3].set(0.0f, flip ? 0.0 : 1.0f);
+    }
+    geometry->setTexCoordArray(0, texcoords);    
+
+    //Only run the MeshSubdivider on geocentric maps
+    if (getMapNode()->getMap()->isGeocentric())
+    {
+        MeshSubdivider ms(osg::Matrixd::inverse(transform->getMatrix()), transform->getMatrix());
+        ms.run(*geometry, _geometryResolution.as(Units::RADIANS), GEOINTERP_RHUMB_LINE);
+    }
+
+    return transform;
+}
+
 void
 ImageOverlay::updateFilters()
 {
@@ -409,7 +506,7 @@ ImageOverlay::updateFilters()
         _texture->setFilter(osg::Texture::MAG_FILTER, *_magFilter);
 
         
-        if (ImageUtils::isPowerOfTwo( _image ) && !(!_image->isMipmap() && ImageUtils::isCompressed(_image)))
+        if (ImageUtils::isPowerOfTwo( _image.get() ) && !(!_image->isMipmap() && ImageUtils::isCompressed(_image.get())))
         {
             _texture->setFilter(osg::Texture::MIN_FILTER, *_minFilter);
         }
@@ -448,7 +545,7 @@ ImageOverlay::setAlpha(float alpha)
     if (*_alpha != alpha)
     {
         _alpha = osg::clampBetween(alpha, 0.0f, 1.0f);
-        dirty();
+        _root->getOrCreateStateSet()->getOrCreateUniform("oe_ImageOverlay_alpha", osg::Uniform::FLOAT)->set(*_alpha);
     }
 }
 
@@ -702,11 +799,30 @@ ImageOverlay::setControlPoint(ControlPoint controlPoint, double lon_deg, double 
 
 void
 ImageOverlay::traverse(osg::NodeVisitor &nv)
-{     
-    if (nv.getVisitorType() == osg::NodeVisitor::UPDATE_VISITOR && _dirty)
+{
+    if (nv.getVisitorType() == nv.EVENT_VISITOR)
     {
-        init();        
+        if (_dirty == true && _updateScheduled == false)
+        {
+            _updateScheduled = true;
+            ADJUST_UPDATE_TRAV_COUNT(this, +1);
+        }
     }
+
+    else if (nv.getVisitorType() == nv.UPDATE_VISITOR)
+    {
+        if (_dirty)
+        {
+            compile();
+        }
+
+        if (_updateScheduled)
+        {
+            _updateScheduled = false;
+            ADJUST_UPDATE_TRAV_COUNT(this, -1);
+        }
+    }
+
     AnnotationNode::traverse(nv);
 }
 
@@ -738,29 +854,4 @@ ImageOverlay::removeCallback( ImageOverlayCallback* cb )
     {
         _callbacks.erase( i );
     }    
-}
-
-void
-ImageOverlay::clamp(const Terrain* terrain, osg::Node* patch)
-{
-    if ( terrain && patch )
-    {
-        GeometryClamper clamper;
-        clamper.setTerrainPatch( patch );
-        clamper.setTerrainSRS( terrain->getSRS() );
-
-        this->accept( clamper );
-        this->dirtyBound();
-    }
-}
-
-void
-ImageOverlay::onTileAdded(const TileKey&          key, 
-                          osg::Node*              tile, 
-                          TerrainCallbackContext& context)
-{
-    if ( tile == 0L || _boundingPolytope.contains(tile->getBound()) )
-    {
-        clamp( context.getTerrain(), tile );
-    }
 }

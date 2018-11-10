@@ -21,6 +21,7 @@
 #include <osgDB/FileNameUtils>
 #include <osgEarth/Map>
 #include <osgEarth/MapNode>
+#include <osgEarth/NodeUtils>
 #include <osgEarthUtil/Controls>
 #include <osgEarthUtil/ExampleResources>
 
@@ -39,7 +40,7 @@ namespace osgEarth { namespace SimpleSky
                                public SkyNodeFactory
     {
     public:
-        META_Object(osgearth_sky_simple, SimpleSkyExtension);
+        META_OE_Extension(osgEarth, SimpleSkyExtension, simple_sky);
 
         // CTORs
         SimpleSkyExtension() { }
@@ -56,14 +57,21 @@ namespace osgEarth { namespace SimpleSky
 
         bool connect(MapNode* mapNode)
         {
-            _skynode = createSkyNode(mapNode->getMap()->getProfile());
+            _skynode = createSkyNode();
+            if (mapNode->getMapSRS()->isProjected())
+            {
+                GeoPoint refPoint;
+                mapNode->getMap()->getProfile()->getExtent().getCentroid(refPoint);
+                _skynode->setReferencePoint(refPoint);
+            }                
             osgEarth::insertParent(_skynode.get(), mapNode);
             return true;
         }
 
         bool disconnect(MapNode* mapNode)
         {
-            //todo
+            osgEarth::removeGroup(_skynode.get());
+            _skynode = 0L;
             return true;
         }
 
@@ -91,31 +99,33 @@ namespace osgEarth { namespace SimpleSky
         {
             ui::Container* container = dynamic_cast<ui::Container*>(control);
             if (container)
-                container->addControl(SkyControlFactory::create(_skynode.get()));
+                _ui = container->addControl(SkyControlFactory::create(_skynode.get()));
             return true;
         }
 
         bool disconnect(ui::Control* control)
         {
+            ui::Container* container = dynamic_cast<ui::Container*>(control);
+            if (container && _ui.valid())
+                container->removeChild(_ui.get());
             return true;
         }
 
     public: // SkyNodeFactory
 
-        SkyNode* createSkyNode(const Profile* profile) {
-            return new SimpleSkyNode(profile->getSRS(), *this);
+        SkyNode* createSkyNode() {
+            return new SimpleSkyNode(*this);
         }
 
 
     protected: // Object
-
-        SimpleSkyExtension(const SimpleSkyExtension& rhs, const osg::CopyOp& op) { }
 
         // DTOR
         virtual ~SimpleSkyExtension() { }
 
 
     private:
+        osg::ref_ptr<ui::Control> _ui;
         osg::ref_ptr<SkyNode> _skynode;
     };
 

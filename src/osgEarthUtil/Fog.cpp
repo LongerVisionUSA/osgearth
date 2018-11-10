@@ -23,9 +23,6 @@
 #include <osg/Fog>
 #include <osgEarthUtil/Shaders>
 #include <osgEarth/Registry>
-#include <osgEarth/Capabilities>
-#include <osgEarth/VirtualProgram>
-#include <osgEarth/TerrainEngineNode>
 
 #define LC "[Fog] "
 
@@ -69,6 +66,7 @@ FogEffect::~FogEffect()
 void FogEffect::attach( osg::StateSet* stateSet )
 {
     VirtualProgram* vp = VirtualProgram::getOrCreate( stateSet );
+    vp->setName("Fog");
     Shaders pkg;
     pkg.load( vp, pkg.Fog_Vertex );
     pkg.load( vp, pkg.Fog_Fragment );
@@ -93,7 +91,7 @@ void FogEffect::detach()
         osg::ref_ptr<osg::StateSet> stateset;
         if ( (*it).lock(stateset) )
         {
-            detach( stateset );
+            detach( stateset.get() );
             (*it) = 0L;
         }
     }

@@ -27,6 +27,7 @@
 #include <osgGA/GUIEventHandler>
 #include <osgViewer/Viewer>
 #include <osgEarth/VirtualProgram>
+#include <osgEarth/GLUtils>
 #include <osgEarthUtil/EarthManipulator>
 #include <osgEarthUtil/ExampleResources>
 
@@ -105,10 +106,9 @@ createFramebufferQuad(App& app)
     t->push_back(osg::Vec2(0,h));
     g->setTexCoordArray(0, t);
 
-    osg::Vec4Array* c = new osg::Vec4Array();
+    osg::Vec4Array* c = new osg::Vec4Array(osg::Array::BIND_OVERALL);
     c->push_back(osg::Vec4(1,1,1,1));
     g->setColorArray(c);
-    g->setColorBinding(osg::Geometry::BIND_OVERALL);
 
     g->addPrimitiveSet(new osg::DrawArrays(GL_QUADS, 0, 4));
 
@@ -126,7 +126,7 @@ createFramebufferPass(App& app)
     osg::StateSet* stateset = quad->getOrCreateStateSet();
 
     static const char* vertSource =
-        "varying vec4 texcoord;\n"
+        "out vec4 texcoord;\n"
         "void effect_vert(inout vec4 vertexView)\n"
         "{\n"
         "    texcoord = gl_MultiTexCoord0; \n"
@@ -139,7 +139,8 @@ createFramebufferPass(App& app)
         "uniform sampler2DRect gcolor;\n"
         "uniform sampler2DRect gnormal;\n"
         "uniform sampler2DRect gdepth;\n"
-        "varying vec4 texcoord;\n"
+        "uniform float osg_FrameTime;\n"
+        "in vec4 texcoord;\n"
 
         "void effect_frag(inout vec4 color)\n"
         "{\n"
@@ -148,7 +149,7 @@ createFramebufferPass(App& app)
         "    vec3 normal = texture(gnormal,texcoord.st).xyz *2.0-1.0; \n"
 
         // sample radius in pixels:
-        "    float e = 2.0; \n"
+        "    float e = 25.0 * sin(osg_FrameTime); \n"
 
         // sample the normals around our pixel and find the approximate
         // deviation from our center normal:
@@ -181,7 +182,7 @@ createFramebufferPass(App& app)
     stateset->addUniform(new osg::Uniform("gnormal", 1));
     stateset->setTextureAttributeAndModes(2, app.gdepth, 1);
     stateset->addUniform(new osg::Uniform("gdepth", 2));
-    stateset->setMode( GL_LIGHTING, 0 );
+    GLUtils::setLineWidth(stateset, 2.0f, 1);
 
     float w = app.gcolor->getTextureWidth();
     float h = app.gcolor->getTextureHeight();

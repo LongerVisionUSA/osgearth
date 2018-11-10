@@ -23,12 +23,7 @@
 #include <osgEarth/XmlUtils>
 #include <osgEarth/JsonUtils>
 #include <osgEarth/FileUtils>
-#include <osgDB/ReaderWriter>
 #include <osgDB/FileNameUtils>
-#include <osgDB/Registry>
-#include <sstream>
-#include <fstream>
-#include <iomanip>
 
 using namespace osgEarth;
 
@@ -45,7 +40,8 @@ Config::setReferrer( const std::string& referrer )
         return;
 
     std::string absReferrer;
-    if( !osgDB::containsServerAddress( referrer ) ) {
+    if( !osgDB::containsServerAddress( referrer ) && !osgDB::isAbsolutePath( referrer ) ) {
+
         absReferrer = osgEarth::getAbsolutePath( referrer );
 
         if( osgEarth::isRelativePath( absReferrer ) )
@@ -80,6 +76,21 @@ Config::fromXML( std::istream& in )
     return xml.valid();
 }
 
+#if 1
+const Config&
+Config::child( const std::string& childName ) const
+{
+    for( ConfigSet::const_iterator i = _children.begin(); i != _children.end(); i++ ) {
+        if ( i->key() == childName )
+            return *i;
+    }
+    static Config s_emptyConf;
+    return s_emptyConf;
+    //Config emptyConf;
+    //emptyConf.setReferrer( _referrer );
+    //return emptyConf;
+}
+#else
 Config
 Config::child( const std::string& childName ) const
 {
@@ -87,11 +98,11 @@ Config::child( const std::string& childName ) const
         if ( i->key() == childName )
             return *i;
     }
-
     Config emptyConf;
     emptyConf.setReferrer( _referrer );
     return emptyConf;
 }
+#endif
 
 const Config*
 Config::child_ptr( const std::string& childName ) const
@@ -167,6 +178,16 @@ Config::find( const std::string& key, bool checkMe )
 /****************************************************************/
 ConfigOptions::~ConfigOptions()
 {
+}
+
+Config
+ConfigOptions::getConfig() const
+{
+    // iniialize with the raw original conf. subclass getConfig's can 
+    // override the values there.
+    Config conf = _conf;
+    conf.setReferrer(referrer());
+    return conf;
 }
 
 /****************************************************************/

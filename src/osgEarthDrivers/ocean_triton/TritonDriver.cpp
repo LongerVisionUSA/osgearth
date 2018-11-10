@@ -47,7 +47,7 @@ namespace osgEarth { namespace Triton
                             public OceanNodeFactory
     {
     public:
-        META_Object(osgearth_ocean_triton, TritonExtension);
+        META_OE_Extension(osgEarthTriton, TritonExtension, triton);
 
         TritonExtension() { }
 
@@ -77,11 +77,12 @@ namespace osgEarth { namespace Triton
     public: // OceanNodeFactory
 
         OceanNode* createOceanNode(MapNode* mapNode) {
-            return new TritonNode(mapNode, *this);
+            TritonNode* node = new TritonNode(*this);
+            node->setMapNode(mapNode);
+            return node;
         }
 
     protected:
-        TritonExtension(const TritonExtension& rhs, const osg::CopyOp& op) { }
 
         virtual ~TritonExtension() { }
 

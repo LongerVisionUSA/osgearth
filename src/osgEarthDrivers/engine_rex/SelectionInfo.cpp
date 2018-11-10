@@ -1,120 +1,85 @@
+/* -*-c++-*- */
+/* osgEarth - Dynamic map generation toolkit for OpenSceneGraph
+* Copyright 2008-2014 Pelican Mapping
+* http://osgearth.org
+*
+* osgEarth is free software; you can redistribute it and/or modify
+* it under the terms of the GNU Lesser General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public License
+* along with this program.  If not, see <http://www.gnu.org/licenses/>
+*/
 #include "SelectionInfo"
-#include "SurfaceNode"
-#include "RexTerrainEngineOptions"
+#include <osgEarth/TileKey>
 
 using namespace osgEarth::Drivers::RexTerrainEngine;
 using namespace osgEarth;
 
 #define LC "[SelectionInfo] "
 
-const unsigned SelectionInfo::_uiLODForMorphingRoundEarth = 0;
-const double   SelectionInfo::_fLodLowerBound   = 12.0;
-const double   SelectionInfo::_fMorphStartRatio = 0.66;
+const double SelectionInfo::_morphStartRatio = 0.66;
 
-unsigned SelectionInfo::lodForMorphing(bool isProjected)
+const SelectionInfo::LOD&
+SelectionInfo::getLOD(unsigned lod) const
 {
-    return (isProjected) ? 0 : _uiLODForMorphingRoundEarth;
-}
+    static SelectionInfo::LOD s_dummy;
 
-double SelectionInfo::morphStartRatio(void) 
-{
-    return _fMorphStartRatio;
-}
-
-unsigned SelectionInfo::numLods(void) const
-{
-    return _numLods;
-}
-
-unsigned SelectionInfo::gridDimX(void) const
-{
-    return _uiGridDimensions.first;
-}
-
-unsigned SelectionInfo::gridDimY(void) const
-{
-    return _uiGridDimensions.second;
-}
-
-VisParameters SelectionInfo::visParameters(unsigned lod) const
-{
-    if (lod-_uiFirstLOD>=_vecVisParams.size())
+    if (lod-_firstLOD >= _lods.size())
     {
         // note, this can happen if firstLOD() is set
         OE_DEBUG << LC <<"Index out of bounds"<<std::endl;
-        return VisParameters();
+        return s_dummy;
     }
-    return _vecVisParams[lod-_uiFirstLOD];
+    return _lods[lod-_firstLOD];
 }
 
-bool SelectionInfo::initialized(void) const
+void
+SelectionInfo::initialize(unsigned firstLod, unsigned maxLod, const Profile* profile, double mtrf)
 {
-    return _vecVisParams.size()>0;
-}
-
-void SelectionInfo::initialize(unsigned uiFirstLOD, unsigned uiMaxLod, unsigned uiTileSize, double fLodFar)
-{
-    if (initialized())
+    if (getNumLODs() > 0)
     {
         OE_INFO << LC <<"Error: Selection Information already initialized"<<std::endl;
         return;
     }
 
-    if (fLodFar<0)
-    {
-        OE_INFO << LC <<"Error: Invalid fLodFar hint"<<std::endl;
-        return;
-    }
-    if (uiFirstLOD>uiMaxLod)
+    if (firstLod > maxLod)
     {
         OE_INFO << LC <<"Error: Inconsistent First and Max LODs"<<std::endl;
         return;
     }
-    _uiGridDimensions.first  = uiTileSize;
-    _uiGridDimensions.second = uiTileSize;
 
-    _uiFirstLOD = uiFirstLOD;
+    _firstLOD = firstLod;
 
     double fLodNear = 0;
     float fRatio = 1.0;
 
-    unsigned currLOD = _uiFirstLOD;
-    while(currLOD<=uiMaxLod)
+    unsigned numLods = maxLod + 1u;
+
+    _lods.resize(numLods);
+
+    for (unsigned lod = 0; lod <= maxLod; ++lod)
     {
-        double fVisibility = fLodNear + fRatio*(fLodFar-fLodNear);
-        if (fVisibility<_fLodLowerBound)
-        {
-            break;
-        }
-        fRatio*= 0.5;
-        ++currLOD;
+        TileKey key(lod, 0, 0, profile);
+        GeoExtent e = key.getExtent();
+        GeoCircle c = e.computeBoundingGeoCircle();
+        double range = c.getRadius() * mtrf * 2.0;
+
+        _lods[lod]._visibilityRange = range;
     }
-
-    _numLods = currLOD-_uiFirstLOD;
-
-    fLodNear = 0;
-    fRatio = 1.0;
-    _vecVisParams.resize(_numLods);
-    for( int i = 0; i < (int)_numLods; ++i )
+    
+    double lodNear = 0;
+    double prevPos = lodNear;
+    for (int i=(int)(numLods-1); i>=0; --i)
     {
-        _vecVisParams[i]._visibilityRange = fLodNear + fRatio*(fLodFar-fLodNear);
-        _vecVisParams[i]._visibilityRange2 = _vecVisParams[i]._visibilityRange * _vecVisParams[i]._visibilityRange;
-        fRatio *= 0.5;
-    }
-
-    double fPrevPos = fLodNear;
-    for (int i=(int)(_numLods-1); i>=0; --i)
-    {
-        _vecVisParams[i]._fMorphEnd   = _vecVisParams[i]._visibilityRange;
-        _vecVisParams[i]._fMorphStart = fPrevPos + (_vecVisParams[i]._fMorphEnd - fPrevPos) * _fMorphStartRatio;
-
-        fPrevPos = _vecVisParams[i]._fMorphStart;
-    }
-    for( int i = 0; i < (int)_numLods; ++i ) 
-    {
-        OE_DEBUG << "LOD[" << i+_uiFirstLOD<<"] = "<<_vecVisParams[i]._visibilityRange
-                 <<" Start: "<<_vecVisParams[i]._fMorphStart
-                 <<" End  : "<<_vecVisParams[i]._fMorphEnd
-                 <<std::endl;
+        _lods[i]._morphEnd   = _lods[i]._visibilityRange;
+        _lods[i]._morphStart = prevPos + (_lods[i]._morphEnd - prevPos) * _morphStartRatio;
+        prevPos = _lods[i]._morphStart;
     }
 }

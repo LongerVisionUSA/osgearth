@@ -24,6 +24,7 @@
 #define OSGEARTH_LIGHTING_H 1
 
 #include <osgEarth/Common>
+#include <osgEarth/ThreadingUtils>
 #include <osg/Node>
 #include <osg/NodeVisitor>
 #include <osg/LightSource>
@@ -31,8 +32,20 @@
 #include <osg/Material>
 #include <set>
 
+// Use this with StateSet::setDefine to toggle lighting in osgEarth lighting shaders.
+#define OE_LIGHTING_DEFINE "OE_LIGHTING"
+
 namespace osgEarth
 {
+    struct OSGEARTH_EXPORT Lighting
+    {
+        //! Sets the lighting mode on a stateset
+        static void set(osg::StateSet* stateSet, osg::StateAttribute::OverrideValue value);
+
+        //! Removed the lighting mode from a stateset
+        static void remove(osg::StateSet* stateSet);
+    };
+
     /**
      * Traverses a graph, looking for Lights and Materials, and generates either static
      * uniforms or dynamic cull callbacks for them so they will work with core profile
@@ -128,6 +141,14 @@ namespace osgEarth
     public: // osg::NodeCallback
 
         bool run(osg::Object* obj, osg::Object* data);
+
+    public: // osg::Object
+
+        void resizeGLBufferObjects(unsigned maxSize);
+        void releaseGLObjects(osg::State* state) const;
+
+        mutable std::vector<osg::ref_ptr<osg::StateSet> > _statesets;
+        mutable Threading::Mutex _statesetsMutex;
     };
 }
 

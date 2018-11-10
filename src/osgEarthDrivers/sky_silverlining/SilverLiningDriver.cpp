@@ -21,6 +21,7 @@
 #include <osgDB/FileNameUtils>
 #include <osgEarth/Map>
 #include <osgEarth/MapNode>
+#include <osgEarth/NodeUtils>
 #include <osgEarthUtil/Controls>
 #include <osgEarthUtil/ExampleResources>
 
@@ -39,7 +40,7 @@ namespace osgEarth { namespace SilverLining
                                   public SkyNodeFactory
     {
     public:
-        META_Object(osgearth_sky_silverlining, SilverLiningExtension);
+        META_OE_Extension(osgEarth, SilverLiningExtension, sky_silverlining);
 
         // CTORs
         SilverLiningExtension() { }
@@ -56,7 +57,13 @@ namespace osgEarth { namespace SilverLining
 
         bool connect(MapNode* mapNode)
         {
-            _skynode = createSkyNode(mapNode->getMap()->getProfile());
+            _skynode = createSkyNode();
+            if (mapNode->getMapSRS()->isProjected())
+            {
+                GeoPoint refPoint;
+                mapNode->getMap()->getProfile()->getExtent().getCentroid(refPoint);
+                _skynode->setReferencePoint(refPoint);
+            }                
             osgEarth::insertParent(_skynode.get(), mapNode);
             return true;
         }
@@ -103,15 +110,13 @@ namespace osgEarth { namespace SilverLining
 
     public: // SkyNodeFactory
 
-        SkyNode* createSkyNode(const Profile* profile) {
-            return new SilverLiningNode(profile->getSRS(), *this);
+        SkyNode* createSkyNode() {
+            return new SilverLiningNode(*this);
         }
 
 
     protected: // Object
-
-        SilverLiningExtension(const SilverLiningExtension& rhs, const osg::CopyOp& op) { }
-
+        
         // DTOR
         virtual ~SilverLiningExtension() { }
 

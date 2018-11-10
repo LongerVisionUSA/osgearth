@@ -97,6 +97,9 @@ namespace osgEarth { namespace Annotation
         MapNode* getMapNode() { return _mapNode.get(); }
         const MapNode* getMapNode() const { return _mapNode.get(); }
 
+    public: // osg::Node
+        
+        void traverse(osg::NodeVisitor& nv);
 
     public: // Style functions
 
@@ -127,18 +130,21 @@ namespace osgEarth { namespace Annotation
         virtual void setDepthAdjustment( bool value );
 
         /**
-         * Sets a lighting override but only if lighting is not already set.
+         * Sets a lighting default, which the user can override
          */
-        void setLightingIfNotSet( bool lighting );
+        void setDefaultLighting( bool lighting );
 
         // hidden default ctor
         AnnotationNode();
 
         // hidden config ctor
-        AnnotationNode(const Config& conf );
+        AnnotationNode(const Config& conf, const osgDB::Options* options);
 
         // hidden copy ctor
         AnnotationNode(const AnnotationNode& rhs, const osg::CopyOp& op=osg::CopyOp::DEEP_COPY_ALL) : osg::Group(rhs, op) { }
+
+        // override to prevent render-order symbology from taking effect.
+        virtual bool supportsRenderBinDetails() const { return true; }
 
     protected:
         
@@ -148,6 +154,10 @@ namespace osgEarth { namespace Annotation
             
         osg::observer_ptr<MapNode> _mapNode;
         static Style s_emptyStyle;
+        bool _mapNodeRequired;
+        osg::NodeCallback* _altCallback;
+
+        void construct();
 
     public:
 

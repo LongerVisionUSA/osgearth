@@ -18,9 +18,7 @@
  */
 #include <osgEarth/Locators>
 #include <osgEarth/TileKey>
-#include <osgEarth/Registry>
 #include <osgEarth/MapInfo>
-#include <osg/Notify>
 
 using namespace osgEarth;
 
@@ -29,7 +27,7 @@ _inverseCalculated(false),
 _x0(0.0), _x1(1.0),
 _y0(0.0), _y1(1.0)
 {
-    this->setThreadSafeRefUnref(true);
+    //nop
 }
 
 GeoLocator::GeoLocator( const GeoExtent& dataExtent ) :
@@ -38,7 +36,7 @@ _dataExtent( dataExtent ),
 _x0(0.0), _x1(1.0),
 _y0(0.0), _y1(1.0)
 {
-    this->setThreadSafeRefUnref(true);
+    //nop
 }
 
 GeoLocator::GeoLocator( const osgTerrain::Locator& prototype, const GeoExtent& dataExtent ) :
@@ -87,8 +85,7 @@ GeoLocator::createForExtent( const GeoExtent& extent, const class MapInfo& map)
 
     // A locator will place the tile on the globe:
     GeoLocator* locator = extent.getSRS()->createLocator(
-        extent.xMin(), extent.yMin(), extent.xMax(), extent.yMax(),
-        map.isPlateCarre() );
+        extent.xMin(), extent.yMin(), extent.xMax(), extent.yMax());
 
     if ( map.isGeocentric() )
         locator->setCoordinateSystemType( osgTerrain::Locator::GEOCENTRIC );

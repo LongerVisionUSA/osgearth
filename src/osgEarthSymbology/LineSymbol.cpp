@@ -22,6 +22,22 @@
 using namespace osgEarth;
 using namespace osgEarth::Symbology;
 
+namespace
+{
+    std::string stripQuotes(const std::string& s) {
+        bool q0 = (s.length() > 0 && (s[0] == '\"' || s[0] == '\''));
+        bool q1 = (s.length() > 1 && (s[s.length()-1] == '\"' || s[s.length()-1] == '\''));
+        if (q0 && q1) 
+            return s.substr(1, s.length()-2);
+        else if (q0)
+            return s.substr(1);
+        else if (q1)
+            return s.substr(0, s.length()-1);
+        else
+            return s;
+    }
+}
+
 OSGEARTH_REGISTER_SIMPLE_SYMBOL(line, LineSymbol);
 
 LineSymbol::LineSymbol( const Config& conf ) :
@@ -38,7 +54,8 @@ Symbol(rhs, copyop),
 _stroke          (rhs._stroke),
 _tessellation    (rhs._tessellation),
 _creaseAngle     (rhs._creaseAngle),
-_tessellationSize(rhs._tessellationSize)
+_tessellationSize(rhs._tessellationSize),
+_imageURI        (rhs._imageURI)
 {
     //nop
 }
@@ -48,20 +65,22 @@ LineSymbol::getConfig() const
 {
     Config conf = Symbol::getConfig();
     conf.key() = "line";
-    conf.addObjIfSet("stroke",       _stroke);
-    conf.addIfSet   ("tessellation", _tessellation);
-    conf.addIfSet   ("crease_angle", _creaseAngle);
-    conf.addObjIfSet("tessellation_size", _tessellationSize );
+    conf.set("stroke",       _stroke);
+    conf.set("tessellation", _tessellation);
+    conf.set("crease_angle", _creaseAngle);
+    conf.set("tessellation_size", _tessellationSize );
+    conf.set("image", _imageURI);
     return conf;
 }
 
 void 
 LineSymbol::mergeConfig( const Config& conf )
 {
-    conf.getObjIfSet("stroke",       _stroke);
-    conf.getIfSet   ("tessellation", _tessellation);
-    conf.getIfSet   ("crease_angle", _creaseAngle);
-    conf.getObjIfSet("tessellation_size", _tessellationSize);
+    conf.get("stroke",       _stroke);
+    conf.get("tessellation", _tessellation);
+    conf.get("crease_angle", _creaseAngle);
+    conf.get("tessellation_size", _tessellationSize);
+    conf.get("image", _imageURI);
 }
 
 void
@@ -97,7 +116,7 @@ LineSymbol::parseSLD(const Config& c, Style& style)
     else if ( match(c.key(), "stroke-rounding-ratio") ) {
         style.getOrCreate<LineSymbol>()->stroke()->roundingRatio() = as<float>(c.value(), 0.4f);
     }
-    else if ( match(c.key(), "stroke-tessellation") ) {
+    else if ( match(c.key(), "stroke-tessellation-segments") ) {
         style.getOrCreate<LineSymbol>()->tessellation() = as<unsigned>( c.value(), 0 );
     }
     else if ( match(c.key(), "stroke-tessellation-size") ) {
@@ -122,5 +141,11 @@ LineSymbol::parseSLD(const Config& c, Style& style)
     }
     else if ( match(c.key(), "stroke-script") ) {
         style.getOrCreate<LineSymbol>()->script() = StringExpression(c.value());
+    }
+    else if (match(c.key(), "stroke-image")) {
+        style.getOrCreate<LineSymbol>()->imageURI() = StringExpression(stripQuotes(c.value()), c.referrer());
+    }
+    else if (match(c.key(), "stroke-smooth")) {
+        style.getOrCreate<LineSymbol>()->stroke()->smooth() = as<bool>(c.value(), false);
     }
 }

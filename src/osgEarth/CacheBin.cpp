@@ -17,20 +17,29 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 #include <osgEarth/CacheBin>
-#include <osgEarth/ImageUtils>
-#include <osgEarth/ThreadingUtils>
 #include <osgEarth/Registry>
 #include <osgEarth/Cache>
 
-#include <osgDB/ReaderWriter>
 #include <osgDB/FileNameUtils>
 #include <osgDB/Registry>
-#include <osg/NodeVisitor>
-#include <osg/Texture>
-#include <osg/Image>
 #include <osg/TextureBuffer>
 
 using namespace osgEarth;
+
+
+// serializer for osg::DummyObject (not present in OSG)
+// We need this because the osgDB::DatabasePager will sometimes
+// add a DummyObject to textures that it finds in paged objects.
+namespace osg
+{
+    REGISTER_OBJECT_WRAPPER(DummyObject,
+                            new osg::DummyObject,
+                            osg::DummyObject,
+                            "osg::DummyObject")
+    {
+        //nop
+    }
+}
 
 namespace
 {
@@ -69,22 +78,12 @@ namespace
             traverse(node);
         }
 
-        void apply(osg::Geode& geode)
+        void apply(osg::Drawable& drawable)
         {
-            for (unsigned i = 0; i < geode.getNumDrawables(); ++i)
-            {
-                apply(geode.getDrawable(i));
-            }
-            apply(static_cast<osg::Node&>(geode));
-        }
-
-        void apply(osg::Drawable* drawable)
-        {
-            if (!drawable) return;
-            apply(drawable->getStateSet());
-            applyUserData(*drawable);
+            apply(drawable.getStateSet());
+            applyUserData(drawable);
             
-            osg::Geometry* geom = drawable->asGeometry();
+            osg::Geometry* geom = drawable.asGeometry();
             if (geom)
                 apply(geom);
         }
@@ -129,42 +128,7 @@ namespace
                         osg::Texture* tex = dynamic_cast<osg::Texture*>(sa);
                         if (tex)
                         {              
-                            tex->setUnRefImageDataAfterApply(false);               
-
-                            // OSG's DatabasePager attaches "marker objects" to Textures' UserData when it runs a
-                            // FindCompileableGLObjectsVisitor. This operation is not thread-safe; it doesn't
-                            // account for the possibility that the texture may already be in use elsewhere.
-                            //
-                            // To prevent a threading violation, and the ensuing crash that reliably occurs
-                            // in Release mode (but not Debug for whatever reason) we are forced to make a
-                            // shallow clone of the Texture object and use that for serialization instead of
-                            // the original, since the original may change in the middle of the process.
-                            // We then replace the original with our close locally and serialize it safely.
-                            //
-                            // This "hack" prevents a crash in OSG 3.4.0 when trying to modify and then write
-                            // serialize the scene graph containing these shared texture objects.
-                            // Kudos to Jason B for figuring this one out.
-
-                            osg::Texture* texClone = osg::clone(tex, osg::CopyOp::SHALLOW_COPY);
-                            if ( texClone )
-                            {
-                                for (unsigned k = 0; k < texClone->getNumImages(); ++k)
-                                {
-                                    osg::Image* image = texClone->getImage(k);
-                                    if ( image )
-                                    {
-                                        applyUserData(*image);
-                                    }
-                                }
-
-                                applyUserData(*texClone);
-
-                                j->second.first = texClone;
-                            }
-                            else
-                            {
-                                OE_WARN << LC << "Texture clone failed.\n";
-                            }
+                            tex->setUnRefImageDataAfterApply(false);   
                         }
                         else
                         {
@@ -247,8 +211,8 @@ namespace
                 {
                     // get the hashed key that the cache bin will use to actually write the image,
                     // and replace the image filename with it.
-                    std::string cacheKey = path;
-                    std::string hashKey = _bin->getHashedKey(cacheKey);
+                    std::string cacheKey = Cache::makeCacheKey(path, "xref");
+                    //std::string hashKey = _bin->getHashedKey(cacheKey);
 
                     // Append the pseudoloader suffix so our PL can locate the image in the cache.
                     image.setFileName(cacheKey + ".osgearth_cachebin");

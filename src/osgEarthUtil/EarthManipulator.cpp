@@ -16,20 +16,13 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
+#undef min
+#undef max
 #include <osgEarthUtil/EarthManipulator>
-#include <osgEarth/MapNode>
-#include <osgEarth/NodeUtils>
 #include <osgEarth/GeoMath>
 #include <osgEarth/TerrainEngineNode>
-#include <osg/Quat>
-#include <osg/Notify>
-#include <osg/MatrixTransform>
-#include <osgUtil/LineSegmentIntersector>
 #include <osgViewer/View>
-#include <iomanip>
-#include <osgEarth/DPLineSegmentIntersector>
 
-#include <osg/io_utils>
 
 #define LC "[EarthManip] "
 
@@ -79,7 +72,19 @@ namespace
         if ( node ) {
             osg::NodePathList nodePaths = node->getParentalNodePaths();
             if ( nodePaths.size() > 0 ) {
-                m = osg::computeLocalToWorld( nodePaths[0] );
+                osg::NodePath p;
+                unsigned start = 0;
+                for(unsigned i=0; i<nodePaths[0].size(); ++i) {
+                    if (dynamic_cast<MapNode*>(nodePaths[0][i]) != 0L) {
+                        start = i;
+                        break;
+                    }
+                }
+                for(unsigned i=start; i<nodePaths[0].size(); ++i)
+                    p.push_back(nodePaths[0][i]);
+                
+                m = osg::computeLocalToWorld(p);
+                //m = osg::computeLocalToWorld( nodePaths[0] );
             }
             else {
                 osg::Transform* t = dynamic_cast<osg::Transform*>(node);
@@ -103,6 +108,46 @@ namespace
         if( input > osg::PI ) input -= osg::PI*2.0;
         return input;
     }
+
+    // This replaces OSG's osg::computeLocalToWorld() function with one that
+    // passes your own NodeVisitor to the Transform::computeLocalToWorldMatrix()
+    // method. (We cannot subclass OSG's visitor because it's private.) This
+    // exists for users that have custom Transform subclasses that override
+    // Transform::computeLocalToWorldMatrix and need access to the NodeVisitor.
+    struct ComputeLocalToWorld : osg::NodeVisitor
+    {
+        osg::Matrix _matrix;
+        osg::NodeVisitor* _nv;
+        ComputeLocalToWorld(osg::NodeVisitor* nv) : _nv(nv) { }
+        void accumulate(const osg::NodePath& path)
+        {
+            if (path.empty()) return;
+            unsigned j = path.size();
+            for (osg::NodePath::const_reverse_iterator i = path.rbegin();
+                i != path.rend();
+                ++i, --j)
+            {
+                const osg::Camera* cam = dynamic_cast<const osg::Camera*>(*i);
+                if (cam)
+                {
+                    if( cam->getReferenceFrame() != osg::Transform::RELATIVE_RF || cam->getParents().empty())
+                        break;
+                }
+                else if (dynamic_cast<MapNode*>(*i))
+                {
+                    break;
+                }
+            }
+            for (; j<path.size(); ++j)
+            {
+                const_cast<osg::Node*>(path[j])->accept(*this);
+            }
+        }
+        void apply(osg::Transform& transform)
+        {
+            transform.computeLocalToWorldMatrix(_matrix, _nv);
+        }
+    };
 }
 
 
@@ -114,12 +159,12 @@ namespace
     struct ManipTerrainCallback : public TerrainCallback
     {
         ManipTerrainCallback(EarthManipulator* manip) : _manip(manip) { }
-        void onTileAdded(const TileKey& key, osg::Node* tile, TerrainCallbackContext& context)
+        void onTileAdded(const TileKey& key, osg::Node* graph, TerrainCallbackContext& context)
         {
             osg::ref_ptr<EarthManipulator> safe;
             if ( _manip.lock(safe) )
             {
-                safe->handleTileAdded(key, tile, context);
+                safe->handleTileAdded(key, graph, context);
             }
         }
         osg::observer_ptr<EarthManipulator> _manip;
@@ -512,6 +557,8 @@ EarthManipulator::ctor_init()
     _setVPAccel2 = 0;
     _lastTetherMode = TETHER_CENTER;
     _homeViewpointDuration = 0;
+    _lastKnownVFOV = 30.0;
+    _userWillCallUpdateCamera = false;
 }
 
 EarthManipulator::EarthManipulator() :
@@ -554,7 +601,7 @@ EarthManipulator::~EarthManipulator()
     osg::ref_ptr<MapNode> mapNode = _mapNode;
     if (mapNode.valid() && _terrainCallback && mapNode->getTerrain())
     {
-        mapNode->getTerrain()->removeTerrainCallback( _terrainCallback );
+        mapNode->getTerrain()->removeTerrainCallback( _terrainCallback.get() );
     }
 }
 
@@ -672,7 +719,7 @@ EarthManipulator::reinitialize()
     _setVP1.unset();
     _lastPointOnEarth.set(0.0, 0.0, 0.0);
     _setVPArcHeight = 0.0;
-    _vfov = 30.0;
+    _pushed = false;
 }
 
 
@@ -699,7 +746,7 @@ EarthManipulator::established()
     }
     _terrainCallback = new ManipTerrainCallback( this );
     if (_mapNode->getTerrain())
-        _mapNode->getTerrain()->addTerrainCallback( _terrainCallback );
+        _mapNode->getTerrain()->addTerrainCallback( _terrainCallback.get() );
 
     // Cache the SRS.
     _srs = _mapNode->getMapSRS();
@@ -725,9 +772,10 @@ EarthManipulator::established()
         else
         {
             Viewpoint vp;
-            vp.focalPoint() = GeoPoint(_srs.get(), safeNode->getBound().center(), ALTMODE_ABSOLUTE);
+            const Profile* profile = _mapNode->getMap()->getProfile();
+            vp.focalPoint() = GeoPoint(_srs.get(), profile->getExtent().getCentroid(), ALTMODE_ABSOLUTE);
             vp.heading()->set( 0.0, Units::DEGREES );
-            vp.pitch()->set( -89.0, Units::DEGREES );
+            vp.pitch()->set( -90.0, Units::DEGREES );
             vp.range()->set( safeNode->getBound().radius()*2.0, Units::METERS );
             vp.positionOffset()->set(0,0,0);
             setHomeViewpoint( vp );
@@ -751,7 +799,7 @@ EarthManipulator::established()
 
 
 void
-EarthManipulator::handleTileAdded(const TileKey& key, osg::Node* tile, TerrainCallbackContext& context)
+EarthManipulator::handleTileAdded(const TileKey& key, osg::Node* graph, TerrainCallbackContext& context)
 {
     // Only do collision avoidance if it's enabled, we're not tethering and
     // we're not in the middle of setting a viewpoint.
@@ -868,6 +916,11 @@ EarthManipulator::getViewpoint() const
     if ( isTethering() && _setVP1.isSet() )
     {
         vp = _setVP1.get();
+
+        if (vp.getNode().valid())
+            vp.focalPoint()->fromWorld(_srs.get(), computeWorld(vp.getNode().get()));
+        else
+            vp.focalPoint().unset();
     }
 
     // Transitioning? Capture the last calculated intermediate position.
@@ -896,13 +949,6 @@ EarthManipulator::getViewpoint() const
     }
 
     return vp;
-}
-
-void
-EarthManipulator::breakTether()
-{
-    // breakTether() is deprecated; add new code to clearViewpoint
-    clearViewpoint();
 }
 
 void
@@ -955,7 +1001,7 @@ EarthManipulator::setViewpoint(const Viewpoint& vp, double duration_seconds)
                 _setVP1->focalPoint() = _setVP0->focalPoint().get();
         }
 
-        _setVPDuration.set( std::max(duration_seconds, 0.0), Units::SECONDS );
+        _setVPDuration.set( osg::maximum(duration_seconds, 0.0), Units::SECONDS );
 
         OE_DEBUG << LC << "setViewpoint:\n"
             << "    from " << _setVP0->toString() << "\n"
@@ -1006,7 +1052,7 @@ EarthManipulator::setViewpoint(const Viewpoint& vp, double duration_seconds)
             // calculate acceleration coefficients
             if ( _setVPArcHeight > 0.0 )
             {
-                // if we're arcing, we need seperate coefficients for the up and down stages
+                // if we're arcing, we need separate coefficients for the up and down stages
                 double h_apex = 2.0*(h0+h1) + _setVPArcHeight;
                 double dh2_up = fabs(h_apex - h0)/100000.0;
                 _setVPAccel = log10( dh2_up );
@@ -1073,7 +1119,7 @@ EarthManipulator::setViewpointFrame(double time_s)
         osg::Vec3d startWorld;
         osg::ref_ptr<osg::Node> startNode;
         if ( _setVP0->getNode(startNode) )
-            startWorld = computeWorld(startNode);
+            startWorld = computeWorld(startNode.get());
         else
             _setVP0->focalPoint()->transform( _srs.get() ).toWorld(startWorld);
 
@@ -1081,14 +1127,14 @@ EarthManipulator::setViewpointFrame(double time_s)
         osg::Vec3d endWorld;
         osg::ref_ptr<osg::Node> endNode;
         if ( _setVP1->getNode(endNode) )
-            endWorld = computeWorld(endNode);
+            endWorld = computeWorld(endNode.get());
         else
             _setVP1->focalPoint()->transform( _srs.get() ).toWorld(endWorld);
 
         // Remaining time is the full duration minus the time since initiation:
         double elapsed = time_s - _setVPStartTime->as(Units::SECONDS);
-        double t = std::min(1.0, elapsed / _setVPDuration.as(Units::SECONDS));
-
+        double duration = _setVPDuration.as(Units::SECONDS);
+        double t = osg::minimum(1.0, duration > 0.0 ? elapsed/duration : 1.0);
         double tp = t;
 
         if ( _setVPArcHeight > 0.0 )
@@ -1196,7 +1242,7 @@ EarthManipulator::resetLookAt()
     if ( pitch > maxPitch )
         rotate( 0.0, -(pitch-maxPitch) );
 
-    osg::Vec3d eye = getMatrix().getTrans();
+    osg::Vec3d eye = getWorldMatrix().getTrans();
 
     // calculate the center point in front of the eye. The reference frame here
     // is the view plane of the camera.
@@ -1218,13 +1264,6 @@ bool
 EarthManipulator::isSettingViewpoint() const
 {
     return _setVP0.isSet() && _setVP1.isSet();
-}
-
-void
-EarthManipulator::cancelViewpointTransition()
-{
-    // @deprecated function - please add new code to clearViewpoint() instead
-    clearViewpoint();
 }
 
 void
@@ -1251,54 +1290,6 @@ EarthManipulator::isTethering() const
     return _setVP1.isSet() && _setVP1->nodeIsSet();
 }
 
-void
-EarthManipulator::setTetherNode(osg::Node* node, double duration_s)
-{
-    // @deprecated function - please don't add new code here.
-    if ( node )
-    {
-        Viewpoint vp;
-        vp.setNode( node );
-        setViewpoint( vp, duration_s );
-    }
-
-    else
-    {
-        clearViewpoint();
-    }
-}
-
-void
-EarthManipulator::setTetherNode(osg::Node* node,
-                                double     duration_s,
-                                double     newHeadingDeg,
-                                double     newPitchDeg,
-                                double     newRangeM)
-{
-    // @deprecated function - please don't add new code here.
-    Viewpoint newVP;
-    newVP.setNode( node );
-    newVP.heading()->set( newHeadingDeg, Units::DEGREES );
-    newVP.pitch()->set( newPitchDeg, Units::DEGREES );
-    newVP.range()->set( newRangeM, Units::METERS );
-
-    setViewpoint( newVP, duration_s );
-
-    OE_WARN << LC << "TODO: call the tether callback\n";
-}
-
-osg::Node*
-EarthManipulator::getTetherNode() const
-{
-    if ( !isTethering() )
-        return 0L;
-
-    osg::ref_ptr<osg::Node> node;
-    _setVP1->getNode(node);
-    return node.release();
-}
-
-
 void EarthManipulator::collisionDetect()
 {
     if (!getSettings()->getTerrainAvoidanceEnabled() ||
@@ -1309,13 +1300,13 @@ void EarthManipulator::collisionDetect()
 
     // The camera has changed, so make sure we aren't under the ground.
 
-    osg::Vec3d eye = getMatrix().getTrans();
+    osg::Vec3d eye = getWorldMatrix().getTrans();
     osg::CoordinateFrame eyeCoordFrame;
     createLocalCoordFrame( eye, eyeCoordFrame );
     osg::Vec3d eyeUp = getUpVector(eyeCoordFrame);
 
     // Try to intersect the terrain with a vector going straight up and down.
-    double r = std::min( _srs->getEllipsoid()->getRadiusEquator(), _srs->getEllipsoid()->getRadiusPolar() );
+    double r = osg::minimum( _srs->getEllipsoid()->getRadiusEquator(), _srs->getEllipsoid()->getRadiusPolar() );
     osg::Vec3d ip, normal;
 
     if (intersect(eye + eyeUp * r, eye - eyeUp * r, ip, normal))
@@ -1348,7 +1339,7 @@ EarthManipulator::intersect(const osg::Vec3d& start, const osg::Vec3d& end, osg:
     {
 		osg::ref_ptr<osgUtil::LineSegmentIntersector> lsi = NULL;
 
-		lsi = new osgEarth::DPLineSegmentIntersector(start,end);
+		lsi = new osgUtil::LineSegmentIntersector(start,end);
 
         osgUtil::IntersectionVisitor iv(lsi.get());
         iv.setTraversalMask(_intersectTraversalMask);
@@ -1377,11 +1368,11 @@ EarthManipulator::intersectLookVector(osg::Vec3d& out_eye,
     {
         double R = _centerHeight;
 
-        getInverseMatrix().getLookAt(out_eye, out_target, out_up, 1.0);
+        getWorldInverseMatrix().getLookAt(out_eye, out_target, out_up, 1.0);
         osg::Vec3d look = out_target-out_eye;
 
 		osg::ref_ptr<osgUtil::LineSegmentIntersector> lsi =
-		    new osgEarth::DPLineSegmentIntersector(out_eye, out_eye+look*1e8);
+		    new osgUtil::LineSegmentIntersector(out_eye, out_eye+look*1e8);
 
         lsi->setIntersectionLimit(lsi->LIMIT_NEAREST);
 
@@ -1535,7 +1526,7 @@ EarthManipulator::updateProjection(osg::Camera* eventCamera)
                 double vfov, ar, zn, zf;
                 if (eventCamera->getProjectionMatrixAsPerspective(vfov, ar, zn, zf))
                 {
-                    _vfov = vfov;
+                    _lastKnownVFOV = vfov;
                 }
             }
 
@@ -1545,7 +1536,7 @@ EarthManipulator::updateProjection(osg::Camera* eventCamera)
             {
                 // need to update the ortho projection matrix to reflect the camera distance.
                 double ar = vp->width()/vp->height();
-                double y = _distance * tan(0.5*osg::DegreesToRadians(_vfov));
+                double y = _distance * tan(0.5*osg::DegreesToRadians(_lastKnownVFOV));
                 double x = y * ar;
 
 #if 0 // TODO: derive the pixel offsets and re-instate them.
@@ -1569,7 +1560,7 @@ EarthManipulator::updateProjection(osg::Camera* eventCamera)
 
                 OE_DEBUG << "ORTHO: "
                     << "ar = " << ar << ", width=" << vp->width() << ", height=" << vp->height()
-                    << ", dist = " << _distance << ", vfov=" << _vfov
+                    << ", dist = " << _distance << ", vfov=" << _lastKnownVFOV
                     << ", X = " << x << ", Y = " << y
                     << std::endl;
             }
@@ -1587,11 +1578,10 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
     if ( !established() )
         return false;
 
-    // make sure the camera callback is up to date:
     osg::View* view = aa.asView();
-    updateProjection( view->getCamera() );
 
-    double time_s_now = osg::Timer::instance()->time_s();
+    //double time_s_now = osg::Timer::instance()->time_s();
+    double time_s_now = view->getFrameStamp()->getReferenceTime();
 
     if ( ea.getEventType() == osgGA::GUIEventAdapter::FRAME )
     {
@@ -1601,6 +1591,19 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
 
         if ( _node.valid() )
         {
+            // Update the mapnode reference frame. This is the transformation
+            // between the Camera and the MapNode. Since all computations are done
+            // in map-world space (e.g., ECEF) we need to then introduce this transform
+            // at the very end (in getInverseMatrix()) to apply the final view matrix.
+            {
+                osg::ref_ptr<MapNode> mapNode;
+                if (_mapNode.lock(mapNode))
+                {
+                    _mapNodeFrame = osg::computeLocalToWorld(mapNode->getParentalNodePaths()[0]); 
+                    _mapNodeFrameInverse.invert(_mapNodeFrame);
+                }
+            }
+
             if ( _pendingViewpoint.isSet() )
             {
                 setViewpoint( _pendingViewpoint.get(), _pendingViewpointDuration.as(Units::SECONDS) );
@@ -1612,8 +1615,6 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
             {
                 if ( _frameCount < 2 )
                     _setVPStartTime->set(_time_s_now, Units::SECONDS);
-
-                setViewpointFrame( time_s_now );
             }
 
             if (_thrown)
@@ -1677,12 +1678,23 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
 
     // if tethering is active, check to see whether the incoming event
     // will break the tether.
-    if ( isTethering() )
+    if (isTethering() && ea.getEventType() != ea.FRAME)
     {
         const ActionTypeVector& atv = _settings->getBreakTetherActions();
         if ( atv.size() > 0 )
         {
-            const Action& action = _settings->getAction( ea.getEventType(), ea.getButtonMask(), ea.getModKeyMask() );
+            EventType eventType = (EventType)ea.getEventType();
+            int buttonMask = ea.getButtonMask();
+            int modKeyMask = ea.getModKeyMask();
+
+            if (eventType == osgGA::GUIEventAdapter::RELEASE && isMouseClick(&ea))
+            {
+                eventType = EVENT_MOUSE_CLICK;
+                buttonMask = _mouse_down_event->getButtonMask();
+                modKeyMask = _mouse_down_event->getModKeyMask();
+            }
+
+            const Action& action = _settings->getAction( eventType, buttonMask, modKeyMask );
             if ( std::find(atv.begin(), atv.end(), action._type) != atv.end() )
             {
                 clearViewpoint();
@@ -1748,6 +1760,7 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
         switch( ea.getEventType() )
         {
             case osgGA::GUIEventAdapter::PUSH:
+                _pushed = true;
                 resetMouse( aa );
                 addMouseEvent( ea );
                 _mouse_down_event = &ea;
@@ -1756,6 +1769,7 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
                 break;
 
             case osgGA::GUIEventAdapter::RELEASE:
+                _pushed = false;
                 if ( _continuous )
                 {
                     // bail out of continuous mode if necessary:
@@ -1798,6 +1812,7 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
             case osgGA::GUIEventAdapter::DOUBLECLICK:
                 // bail out of continuous mode if necessary:
                 _continuous = false;
+                _pushed = false;
                 addMouseEvent( ea );
                 if (_mouse_down_event)
                 {
@@ -1815,19 +1830,22 @@ EarthManipulator::handle(const osgGA::GUIEventAdapter& ea, osgGA::GUIActionAdapt
 
             case osgGA::GUIEventAdapter::DRAG:
                 {
-                    action = _settings->getAction( ea.getEventType(), ea.getButtonMask(), ea.getModKeyMask() );
-                    addMouseEvent( ea );
-                    bool wasContinuous = _continuous;
-                    _continuous = action.getBoolOption(OPTION_CONTINUOUS, false);
-                    if ( handleMouseAction( action, aa.asView() ) )
-                        aa.requestRedraw();
+                    if (_pushed)
+                    {
+                        action = _settings->getAction( ea.getEventType(), ea.getButtonMask(), ea.getModKeyMask() );
+                        addMouseEvent( ea );
+                        bool wasContinuous = _continuous;
+                        _continuous = action.getBoolOption(OPTION_CONTINUOUS, false);
+                        if ( handleMouseAction( action, aa.asView() ) )
+                            aa.requestRedraw();
 
-                    if ( _continuous && !wasContinuous )
-                        _last_continuous_action_time = time_s_now; //_time_s_now;
+                        if ( _continuous && !wasContinuous )
+                            _last_continuous_action_time = time_s_now; //_time_s_now;
 
-                    aa.requestContinuousUpdate(_continuous);
-                    _thrown = false;
-                    handled = true;
+                        aa.requestContinuousUpdate(_continuous);
+                        _thrown = false;
+                        handled = true;
+                    }
                 }
                 break;
 
@@ -1916,16 +1934,8 @@ osg::NodePathList getAllParentalNodePaths(osg::Node* node, osg::Node* haltTraver
 }
 
 void
-EarthManipulator::updateTether()
+EarthManipulator::updateTether(double t)
 {
-    double t = 1.0;
-
-    // If we are still setting the viewpoint, tick that now.
-    if ( isSettingViewpoint() )
-    {
-        t = setViewpointFrame( _time_s_now );
-    }
-
     // Initial transition is complete, so update the camera for tether.
     osg::ref_ptr<osg::Node> node;
     if ( _setVP1->getNode(node) )
@@ -1938,7 +1948,12 @@ EarthManipulator::updateTether()
         if ( nodePaths.empty() )
             return;
 
-        L2W = osg::computeLocalToWorld( nodePaths[0] );
+        osg::ref_ptr<osg::NodeVisitor> nv;
+        _updateCameraNodeVisitor.lock(nv);
+        ComputeLocalToWorld computeL2W(nv.get());
+        computeL2W.accumulate(nodePaths[0]);
+        L2W = computeL2W._matrix;
+
         if ( !L2W.valid() )
             return;
 
@@ -1987,20 +2002,6 @@ EarthManipulator::updateTether()
         }
 
         _lastTetherMode = _settings->getTetherMode();
-    }
-}
-
-Viewpoint
-EarthManipulator::getTetherNodeViewpoint() const
-{
-    // @deprecated; please do not add new code here.
-    if ( isTethering() )
-    {
-        return _setVP1.get();
-    }
-    else
-    {
-        return Viewpoint();
     }
 }
 
@@ -2297,6 +2298,12 @@ EarthManipulator::setByMatrix(const osg::Matrixd& matrix)
 osg::Matrixd
 EarthManipulator::getMatrix() const
 {
+    return getWorldMatrix() * _mapNodeFrame;
+}
+
+osg::Matrixd
+EarthManipulator::getWorldMatrix() const
+{
     return osg::Matrixd::translate(_viewOffset.x(), _viewOffset.y(), _distance) *
            osg::Matrixd::rotate   (_rotation) *
            osg::Matrixd::rotate   (_tetherRotation) *
@@ -2307,6 +2314,12 @@ EarthManipulator::getMatrix() const
 
 osg::Matrixd
 EarthManipulator::getInverseMatrix() const
+{
+    return _mapNodeFrameInverse * getWorldInverseMatrix();
+}
+
+osg::Matrixd
+EarthManipulator::getWorldInverseMatrix() const
 {
     return osg::Matrixd::translate(-_center)*
            osg::Matrixd::rotate   (_centerRotation.inverse()) *
@@ -2319,14 +2332,41 @@ EarthManipulator::getInverseMatrix() const
 void
 EarthManipulator::updateCamera(osg::Camera& camera)
 {
-    // update the camera to reflect the current tether node
-    if ( isTethering() )
+    // time exactly now
+    double now = osg::Timer::instance()->time_s();
+
+    // interpolation through a setViewpoint, if applicable
+    double t = 0.0;
+
+    // Update a viewpoint transition:
+    if (isSettingViewpoint())
     {
-        updateTether();
+        t = setViewpointFrame(now);
     }
 
-    // then update the camera as usual.
+    // Update a camera tethered to a node:
+    if (isTethering())
+    {
+        updateTether(t);
+    }
+
+    // Update an ortho/perspective projection tracking:
+    updateProjection(&camera);
+
+
     osgGA::CameraManipulator::updateCamera(camera);
+    
+    // Invoke the callback once the camera's been udpated for the ensuing render:
+    if (_updateCameraCallback.valid())
+    {
+        _updateCameraCallback->onUpdateCamera(&camera);
+    }
+}
+
+void
+EarthManipulator::setUpdateCameraNodeVisitor(osg::NodeVisitor* nv)
+{
+    _updateCameraNodeVisitor = nv;
 }
 
 void
@@ -2428,7 +2468,6 @@ EarthManipulator::recalculateCenter( const osg::CoordinateFrame& frame )
         osg::Vec3d ip1;
         osg::Vec3d ip2;
         osg::Vec3d normal;
-        // extend coordonate to fall on the edge of the boundingbox see http://www.osgearth.org/ticket/113
         bool hit_ip1 = intersect(_center - up * ilen * 0.1, _center + up * ilen, ip1, normal);
         bool hit_ip2 = intersect(_center + up * ilen * 0.1, _center - up * ilen, ip2, normal);
         if (hit_ip1)
@@ -2513,27 +2552,7 @@ EarthManipulator::pan( double dx, double dy )
                 _centerRotation = _centerRotation * pan_rotation;
                 _previousUp = new_localUp;
             }
-
-#if 0
-            else
-            {
-                //OE_DEBUG<<"New up orientation nearly inline - no need to rotate"<<std::endl;
-            }
-
-            double new_azim;
-            getEulerAngles( _rotation, &new_azim, 0L );
-            double delta_azim = new_azim - old_azim;
-
-            osg::Quat q;
-            q.makeRotate( delta_azim, new_localUp );
-            if ( !q.zeroRotation() )
-            {
-                _centerRotation = _centerRotation * q;
-            }
-#endif
         }
-
-        //recalculateLocalPitchAndAzimuth();
     }
     else
     {
@@ -2633,6 +2652,12 @@ void
 EarthManipulator::setDistance( double distance )
 {
     _distance = osg::clampBetween( distance, _settings->getMinDistance(), _settings->getMaxDistance() );
+}
+
+void
+EarthManipulator::setInitialVFOV(double vfov)
+{
+    _lastKnownVFOV = vfov;
 }
 
 void
@@ -2930,7 +2955,7 @@ EarthManipulator::recalculateRoll()
 void
 EarthManipulator::getCompositeEulerAngles( double* out_azim, double* out_pitch ) const
 {
-    osg::Matrix m = getMatrix() * osg::Matrixd::inverse(_centerLocalToWorld);
+    osg::Matrix m = getWorldMatrix() * osg::Matrixd::inverse(_centerLocalToWorld);
     osg::Vec3d look = -getUpVector( m );
     osg::Vec3d up   =  getFrontVector( m );
 
@@ -3084,7 +3109,7 @@ namespace // Utility functions for drag()
         using namespace osg;
         // new sphere with center at midpoint between pt and input sphere
         Vec3d center2 = (pt + center) / 2.0;
-        double rad2 = (pt - center2).length();
+        double radius2 = (pt - center2).length();
         Vec3d resCtr;
         double resRad;
         // Use Thales' theorem, which states that a triangle inscribed in
@@ -3092,7 +3117,7 @@ namespace // Utility functions for drag()
         // third on the circle, is a right triangle. Since one endpoint is
         // the center of the original sphere (the earth) and the other is
         // pt, we can get our tangent from that.
-        bool valid = sphereInterection(center, radius, center2, rad2, resCtr,
+        bool valid = sphereInterection(center, radius, center2, radius2, resCtr,
                                        resRad);
         if (!valid)
             return Vec3d(0.0, 0.0, 0.0);

@@ -16,46 +16,31 @@ the feature data.
         <terrain min_lod="8"/>
     </options>
 
-    <image name="world" driver="gdal">
+    <image name="Imagery" driver="gdal">
         <url>../data/world.tif</url>
     </image>
     
-    <model name="countries" driver="feature_geom">
-                          
-        <features name="states" driver="ogr">
-            <url>../data/world.shp</url>
-            <filters>
-                <resample max_length="5.0"/>
-                <buffer distance="-0.05"/>
-            </filters>
-        </features>
-        
+    <feature_model name="Countries" feature_source="world-data">
         <styles>        
             <style type="text/css">
-                p1 {
-                   fill:               #ffff807f;
+                base {
                    render-depth-test:  false;
                    altitude-clamping:  terrain-drape;
+                }                
+                p1 : base {
+                   fill: #ffff807f;
                 }       
-                p2 {
-                   fill:               #80ffff7f;
-                   render-depth-test:  false;
-                   altitude-clamping:  terrain-drape;
+                p2 : base {
+                   fill: #80ffff7f;
                 }   
-                p3 {
-                   fill:               #ff80ff7f;
-                   render-depth-test:  false;
-                   altitude-clamping:  terrain-drape;
+                p3 : base {
+                   fill: #ff80ff7f;
                 }       
-                p4 {
-                   fill:               #ff80807f;
-                   render-depth-test:  false;
-                   altitude-clamping:  terrain-drape;
+                p4 : base {
+                   fill: #ff80807f;
                 }     
-                p5 {
-                   fill:               #80ff807f;
-                   render-depth-test:  false;
-                   altitude-clamping:  terrain-drape;
+                p5 : base {
+                   fill: #80ff807f;
                 }                                      
             </style>
         
@@ -91,5 +76,13 @@ the feature data.
             
         </styles>
         
-    </model>
+    </feature_model>
+    
+    <feature_source name="world-data" driver="ogr">
+        <url>../data/world.shp</url>
+        <filters>
+            <resample max_length="5.0"/>
+            <buffer distance="-0.05"/>
+        </filters>
+    </feature_source>
 </map>

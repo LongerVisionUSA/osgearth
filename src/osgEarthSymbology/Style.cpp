@@ -20,6 +20,7 @@
 * along with this program.  If not, see <http://www.gnu.org/licenses/>
 */
 #include <osgEarthSymbology/Style>
+#include <osgEarthSymbology/StyleSheet>
 #include <osgEarthSymbology/CssUtils>
 #include <algorithm>
 
@@ -97,7 +98,12 @@ bool Style::removeSymbol(Symbol* symbol)
 
 Style::Style( const Config& conf )
 {
-    mergeConfig( conf );
+    mergeConfig( conf, 0L );
+}
+
+Style::Style( const Config& conf, const StyleSheet* sheet)
+{
+    mergeConfig( conf, sheet );
 }
 
 Style
@@ -126,19 +132,45 @@ void Style::copySymbols(const Style& style)
 }
 
 void
-Style::fromSLD( const Config& sld )
+Style::fromSLD(const Config& sld, const StyleSheet* sheet)
 {
-    setName( sld.key() );
+    // check for style inheritance:
+    std::string::size_type pos = sld.key().find(':');
+    if (pos != std::string::npos)
+    {
+        StringVector tokens;
+        StringTokenizer(sld.key(), tokens, ":");
+        if (tokens.size() == 2)
+        {
+            // even if there's no stylesheet, set the name to the tokenized value.
+            setName(tokens[0]);  
+
+            if (sheet)
+            {
+                const Style* parent = sheet->getStyle(tokens[1], false);
+                if (parent)
+                {
+                    copySymbols(*parent);
+                }
+            }
+        }
+    }
+
+    // no inheritance:
+    else
+    {
+        setName( sld.key() );
+    }
 
     for( ConfigSet::const_iterator kid = sld.children().begin(); kid != sld.children().end(); ++kid )
     {
         const Config& p = *kid;
-		SymbolRegistry::instance()->parseSLD( p, *this );		
+		SymbolRegistry::instance()->parseSLD(p, *this);
     }
 }
 
 void
-Style::mergeConfig( const Config& conf )
+Style::mergeConfig( const Config& conf, const StyleSheet* sheet )
 {
     if ( _name.empty() )
         _name = conf.value( "name" );
@@ -147,7 +179,7 @@ Style::mergeConfig( const Config& conf )
     if ( _name.empty() )
         _name = conf.key();
 
-    conf.getIfSet( "url", _uri ); // named "url" for back compat
+    conf.get( "url", _uri ); // named "url" for back compat
 
     _origType = conf.value( "type" );
     std::string textData = trim(conf.value());
@@ -165,7 +197,7 @@ Style::mergeConfig( const Config& conf )
         CssUtils::readConfig( _origData, conf.referrer(), blocks );
         if ( blocks.size() > 0 )
         {
-            fromSLD( blocks.front() );
+            fromSLD( blocks.front(), sheet );
         }
     }
     else
@@ -190,7 +222,7 @@ Style::getConfig( bool keepOrigType ) const
     Config conf( "style" );
     conf.set("name", _name);
 
-    conf.addIfSet( "url", _uri );
+    conf.set( "url", _uri );
     
     if ( _origType == "text/css" && keepOrigType )
     {

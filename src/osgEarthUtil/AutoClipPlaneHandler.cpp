@@ -18,10 +18,7 @@
  */
 #include <osgEarthUtil/AutoClipPlaneHandler>
 #include <osgEarth/MapNode>
-#include <osgEarth/Terrain>
-#include <osgEarth/Notify>
 #include <osgEarth/Registry>
-#include <osgEarth/Utils>
 #include <osgEarth/CullingUtils>
 
 #define LC "[AutoClip] "
@@ -134,8 +131,8 @@ namespace
 
         bool clampProjectionMatrixImplementation(osg::Matrixf& projection, double& znear, double& zfar) const
         {
-            double n = std::max( znear, _minNear );
-            double f = std::min( zfar, _maxFar );
+            double n = osg::maximum( znear, _minNear );
+            double f = osg::minimum( zfar, _maxFar );
             bool r = _clampProjectionMatrix( projection, n, f, _nearFarRatio );
             if ( r ) {
                 znear = n;
@@ -146,8 +143,8 @@ namespace
 
         bool clampProjectionMatrixImplementation(osg::Matrixd& projection, double& znear, double& zfar) const
         {
-            double n = std::max( znear, _minNear );
-            double f = std::min( zfar, _maxFar );
+            double n = osg::maximum( znear, _minNear );
+            double f = osg::minimum( zfar, _maxFar );
             bool r = _clampProjectionMatrix( projection, n, f, _nearFarRatio );
             if ( r ) {
                 znear = n;
@@ -179,7 +176,7 @@ _autoFarPlaneClamping( true )
         {
             // Select the minimal radius..
             const osg::EllipsoidModel* em = map->getProfile()->getSRS()->getEllipsoid();
-            _rp = std::min( em->getRadiusEquator(), em->getRadiusPolar() );
+            _rp = osg::minimum( em->getRadiusEquator(), em->getRadiusPolar() );
             _rp2 = _rp*_rp;
             _active = true;
         }
@@ -192,7 +189,7 @@ _autoFarPlaneClamping( true )
     else
     {
         const osg::EllipsoidModel* em = Registry::instance()->getGlobalGeodeticProfile()->getSRS()->getEllipsoid();
-        _rp = std::min( em->getRadiusEquator(), em->getRadiusPolar() );
+        _rp = osg::minimum( em->getRadiusEquator(), em->getRadiusPolar() );
         _rp2 = _rp*_rp;
         _active = true;
     }
@@ -234,14 +231,10 @@ AutoClipPlaneCullCallback::operator()( osg::Node* node, osg::NodeVisitor* nv )
                     c->_maxFar = DBL_MAX;
                 }
 
-                // get the height-above-ellipsoid. If we need to be more accurate, we can use 
-                // ElevationQuery in the future..
-                //osg::Vec3d loc;
                 GeoPoint loc;
                 if ( map )
                 {
                     loc.fromWorld( map->getSRS(), eye );
-                    //map->worldPointToMapPoint( eye, loc );
                 }
                 else
                 {

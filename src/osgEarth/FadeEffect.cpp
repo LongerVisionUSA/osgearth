@@ -17,7 +17,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 #include <osgEarth/FadeEffect>
-#include <osgEarth/VirtualProgram>
 #include <osgEarth/Registry>
 #include <osgEarth/Capabilities>
 #include <osgEarth/CullingUtils>
@@ -31,18 +30,18 @@ _duration      ( 1.0f ),
 _maxRange      ( FLT_MAX ),
 _attenDist     ( 1000.0f )
 {
-    conf.getIfSet( "duration",             _duration );
-    conf.getIfSet( "max_range",            _maxRange );
-    conf.getIfSet( "attenuation_distance", _attenDist );
+    conf.get( "duration",             _duration );
+    conf.get( "max_range",            _maxRange );
+    conf.get( "attenuation_distance", _attenDist );
 }
 
 Config
 FadeOptions::getConfig() const
 {
     Config conf("fading");
-    conf.addIfSet( "duration",             _duration );
-    conf.addIfSet( "max_range",            _maxRange );
-    conf.addIfSet( "attenuation_distance", _attenDist );
+    conf.set( "duration",             _duration );
+    conf.set( "max_range",            _maxRange );
+    conf.set( "attenuation_distance", _attenDist );
     return conf;
 }
 
@@ -60,7 +59,7 @@ namespace
         "uniform float oe_fadeeffect_attenDist; \n"
         "uniform float osg_FrameTime; \n"
 
-        "varying float oe_fadeeffect_opacity; \n"
+        "out float oe_fadeeffect_opacity; \n"
 
         "void oe_vertFadeEffect(inout vec4 VertexView) \n"
         "{ \n"
@@ -73,7 +72,7 @@ namespace
         "#version " GLSL_VERSION_STR "\n"
         GLSL_DEFAULT_PRECISION_FLOAT "\n"
 
-        "varying float oe_fadeeffect_opacity; \n"
+        "in float oe_fadeeffect_opacity; \n"
 
         "void oe_fragFadeEffect( inout vec4 color ) \n"
         "{ \n"
@@ -165,7 +164,7 @@ namespace
         "#version " GLSL_VERSION_STR "\n"
         GLSL_DEFAULT_PRECISION_FLOAT "\n"
 
-        "varying float oe_FadeLOD_opacity; \n"
+        "in float oe_FadeLOD_opacity; \n"
         "void oe_fragFadeLOD( inout vec4 color ) \n"
         "{ \n"
         "    color.a *= oe_FadeLOD_opacity; \n"

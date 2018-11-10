@@ -24,24 +24,94 @@
 #include <osgEarth/Registry>
 #include <osgEarth/Capabilities>
 #include <osgEarth/DrapeableNode>
+#include <osgEarth/ClampableNode>
+#include <osgEarth/GLUtils>
+#include <osgEarth/Progress>
 #include <osg/Notify>
 
 using namespace osgEarth;
 using namespace osgEarth::Features;
 using namespace osgEarth::Symbology;
 
+#ifndef GL_CLIP_DISTANCE0
+#define GL_CLIP_DISTANCE0 0x3000
+#endif
+
 #define LC "[FeatureModelSource] "
 
-//------------------------------------------------------------------------
+//........................................................................
 
-FeatureModelSourceOptions::FeatureModelSourceOptions( const ConfigOptions& options ) :
-ModelSourceOptions ( options ),
+FeatureModelOptions::FeatureModelOptions(const ConfigOptions& co) :
 _lit               ( true ),
 _maxGranularity_deg( 1.0 ),
 _clusterCulling    ( true ),
 _backfaceCulling   ( true ),
 _alphaBlending     ( true ),
-_sessionWideResourceCache( true )
+_sessionWideResourceCache( true ),
+_nodeCaching(false)
+{
+    fromConfig(co.getConfig());
+}
+
+void
+FeatureModelOptions::fromConfig(const Config& conf)
+{
+    conf.get("features", _featureSource);
+
+    conf.get( "styles",           _styles );
+    conf.get( "layout",           _layout );
+    conf.get( "fading",           _fading );
+    conf.get( "feature_name",     _featureNameExpr );
+    conf.get( "feature_indexing", _featureIndexing );
+
+    conf.get( "lighting",         _lit );
+    conf.get( "max_granularity",  _maxGranularity_deg );
+    conf.get( "cluster_culling",  _clusterCulling );
+    conf.get( "backface_culling", _backfaceCulling );
+    conf.get( "alpha_blending",   _alphaBlending );
+    conf.get( "node_caching",     _nodeCaching );
+    
+    conf.get( "session_wide_resource_cache", _sessionWideResourceCache );
+
+    // Support a singleton style (convenience)
+    optional<Style> style;
+    conf.get("style", style);
+    if (style.isSet())
+    {
+        if (_styles.valid() == false) _styles = new StyleSheet();
+        _styles->addStyle(style.get());
+    }
+}
+
+Config
+FeatureModelOptions::getConfig() const
+{
+    Config conf;
+    conf.set("features", _featureSource);
+
+    conf.set( "styles",           _styles );
+    conf.set( "layout",           _layout );
+    conf.set( "fading",           _fading );
+    conf.set( "feature_name",     _featureNameExpr );
+    conf.set( "feature_indexing", _featureIndexing );
+
+    conf.set( "lighting",         _lit );
+    conf.set( "max_granularity",  _maxGranularity_deg );
+    conf.set( "cluster_culling",  _clusterCulling );
+    conf.set( "backface_culling", _backfaceCulling );
+    conf.set( "alpha_blending",   _alphaBlending );
+    conf.set( "node_caching",     _nodeCaching );
+    
+    conf.set( "session_wide_resource_cache", _sessionWideResourceCache );
+
+    return conf;
+}
+
+//........................................................................
+
+FeatureModelSourceOptions::FeatureModelSourceOptions(const ConfigOptions& options) :
+ModelSourceOptions(options),
+FeatureModelOptions()
 {
     fromConfig( _conf );
 }
@@ -49,24 +119,23 @@ _sessionWideResourceCache( true )
 void
 FeatureModelSourceOptions::fromConfig( const Config& conf )
 {
-    conf.getObjIfSet( "features", _featureOptions );
+    conf.get( "features", _featureOptions );
     _featureSource = conf.getNonSerializable<FeatureSource>("feature_source");
-
-    conf.getObjIfSet( "styles",           _styles );
-    conf.getObjIfSet( "layout",           _layout );
-    conf.getObjIfSet( "paging",           _layout ); // backwards compat.. to be deprecated
-    conf.getObjIfSet( "cache_policy",     _cachePolicy );
-    conf.getObjIfSet( "fading",           _fading );
-    conf.getObjIfSet( "feature_name",     _featureNameExpr );
-    conf.getObjIfSet( "feature_indexing", _featureIndexing );
-
-    conf.getIfSet( "lighting",         _lit );
-    conf.getIfSet( "max_granularity",  _maxGranularity_deg );
-    conf.getIfSet( "cluster_culling",  _clusterCulling );
-    conf.getIfSet( "backface_culling", _backfaceCulling );
-    conf.getIfSet( "alpha_blending",   _alphaBlending );
     
-    conf.getIfSet( "session_wide_resource_cache", _sessionWideResourceCache );
+    conf.get( "styles",           _styles );
+    conf.get( "layout",           _layout );
+    conf.get( "fading",           _fading );
+    conf.get( "feature_name",     _featureNameExpr );
+    conf.get( "feature_indexing", _featureIndexing );
+
+    conf.get( "lighting",         _lit );
+    conf.get( "max_granularity",  _maxGranularity_deg );
+    conf.get( "cluster_culling",  _clusterCulling );
+    conf.get( "backface_culling", _backfaceCulling );
+    conf.get( "alpha_blending",   _alphaBlending );
+    conf.get( "node_caching",     _nodeCaching );
+    
+    conf.get( "session_wide_resource_cache", _sessionWideResourceCache );
 }
 
 Config
@@ -74,25 +143,27 @@ FeatureModelSourceOptions::getConfig() const
 {
     Config conf = ModelSourceOptions::getConfig();
 
-    conf.updateObjIfSet( "features", _featureOptions );    
+    conf.set( "features", _featureOptions );    
     if (_featureSource.valid())
     {
-        conf.addNonSerializable("feature_source", _featureSource.get());
+        conf.setNonSerializable("feature_source", _featureSource.get());
     }
-    conf.updateObjIfSet( "styles",           _styles );
-    conf.updateObjIfSet( "layout",           _layout );
-    conf.updateObjIfSet( "cache_policy",     _cachePolicy );
-    conf.updateObjIfSet( "fading",           _fading );
-    conf.updateObjIfSet( "feature_name",     _featureNameExpr );
-    conf.updateObjIfSet( "feature_indexing", _featureIndexing );
+    conf.set("feature_source", _featureSourceLayer);
 
-    conf.updateIfSet( "lighting",         _lit );
-    conf.updateIfSet( "max_granularity",  _maxGranularity_deg );
-    conf.updateIfSet( "cluster_culling",  _clusterCulling );
-    conf.updateIfSet( "backface_culling", _backfaceCulling );
-    conf.updateIfSet( "alpha_blending",   _alphaBlending );
+    conf.set( "styles",           _styles );
+    conf.set( "layout",           _layout );
+    conf.set( "fading",           _fading );
+    conf.set( "feature_name",     _featureNameExpr );
+    conf.set( "feature_indexing", _featureIndexing );
+
+    conf.set( "lighting",         _lit );
+    conf.set( "max_granularity",  _maxGranularity_deg );
+    conf.set( "cluster_culling",  _clusterCulling );
+    conf.set( "backface_culling", _backfaceCulling );
+    conf.set( "alpha_blending",   _alphaBlending );
+    conf.set( "node_caching",     _nodeCaching );
     
-    conf.updateIfSet( "session_wide_resource_cache", _sessionWideResourceCache );
+    conf.set( "session_wide_resource_cache", _sessionWideResourceCache );
 
     return conf;
 }
@@ -130,6 +201,7 @@ FeatureModelSource::initialize(const osgDB::Options* readOptions)
     {
         _features = _options.featureSource().get();
     }
+
     else if ( _options.featureOptions().isSet() )
     {
         _features = FeatureSourceFactory::create( _options.featureOptions().value() );
@@ -139,7 +211,9 @@ FeatureModelSource::initialize(const osgDB::Options* readOptions)
         return Status::Error(Status::ServiceUnavailable, "Failed to create a feature driver");
 
     // open the feature source if it exists:
-    const Status& featuresStatus = _features->open(_readOptions.get());
+    _features->setReadOptions(_readOptions.get());
+
+    const Status& featuresStatus = _features->open();
     if (featuresStatus.isError())
         return featuresStatus;
 
@@ -217,18 +291,7 @@ FeatureModelSource::createNodeImplementation(const Map*        map,
     session->setName( this->getName() );
 
     // Graph that will render feature models. May included paged data.
-    FeatureModelGraph* graph = new FeatureModelGraph( 
-       session,
-       _options,
-       factory,
-       this,
-       _preMergeOps.get(),
-       _postMergeOps.get() );
-
-    graph->setName( session->getName() );
-
-    // then run the ops on the staring graph:
-    firePostProcessors( graph );
+    FeatureModelGraph* graph = new FeatureModelGraph(session, _options, factory, getSceneGraphCallbacks());
 
     return graph;
 }
@@ -253,6 +316,13 @@ FeatureNodeFactory::getOrCreateStyleGroup(const Style& style,
         group = new DrapeableNode();
     }
 
+    else if (alt &&
+        alt->clamping() == alt->CLAMP_TO_TERRAIN &&
+        alt->technique() == alt->TECHNIQUE_GPU)
+    {
+        group = new ClampableNode();
+    }
+
     // Otherwise, a normal group.
     if ( !group )
     {
@@ -274,15 +344,9 @@ FeatureNodeFactory::getOrCreateStyleGroup(const Style& style,
         {
             osg::StateSet* stateset = group->getOrCreateStateSet();
 
-            stateset->setMode(
-                GL_LIGHTING,
+            GLUtils::setLighting(
+                stateset,
                 (render->lighting() == true ? osg::StateAttribute::ON : osg::StateAttribute::OFF) | osg::StateAttribute::OVERRIDE );
-
-            if ( Registry::capabilities().supportsGLSL() )
-            {
-                stateset->addUniform( Registry::shaderFactory()->createUniformForGLMode(
-                    GL_LIGHTING, render->lighting().value()));
-            }
         }
 
         if ( render->backfaceCulling().isSet() )
@@ -292,10 +356,10 @@ FeatureNodeFactory::getOrCreateStyleGroup(const Style& style,
                 (render->backfaceCulling() == true ? osg::StateAttribute::ON : osg::StateAttribute::OFF) | osg::StateAttribute::OVERRIDE );
         }
 
-#ifndef OSG_GLES2_AVAILABLE
+#if !(defined(OSG_GLES2_AVAILABLE) || defined(OSG_GLES3_AVAILABLE))
         if ( render->clipPlane().isSet() )
         {
-            GLenum mode = GL_CLIP_PLANE0 + (render->clipPlane().value());
+            GLenum mode = GL_CLIP_DISTANCE0 + (render->clipPlane().value());
             group->getOrCreateStateSet()->setMode(mode, 1);
         }
 #endif

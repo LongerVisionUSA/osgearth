@@ -22,13 +22,10 @@
 #include <osgEarthUtil/Shadowing>
 #include <osgEarthUtil/Shaders>
 #include <osgEarth/CullingUtils>
-#include <osgEarth/VirtualProgram>
 #include <osgEarth/Registry>
 #include <osgEarth/Capabilities>
 #include <osgEarth/Shadowing>
-#include <osg/Texture2D>
 #include <osg/CullFace>
-#include <osg/ValueObject>
 #include <osgShadow/ConvexPolyhedron>
 
 #define LC "[ShadowCaster] "
@@ -52,7 +49,7 @@ _traversalMask( ~0 )
         // default slices:
         _ranges.push_back(0.0f);
         _ranges.push_back(1750.0f);
-        _ranges.push_back(5000.0f);
+        _ranges.push_back(25000.0f);
 
         reinitialize();
     }
@@ -150,14 +147,19 @@ ShadowCaster::reinitialize()
         new osg::CullFace(osg::CullFace::FRONT),
         osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
 
-    _rttStateSet->addUniform(new osg::Uniform("oe_isShadowCamera", true), osg::StateAttribute::OVERRIDE);
+    // tell the terrain engine this is a depth-only camera
+    //_rttStateSet->setDefine("OE_IS_SHADOW_CAMERA"); // done above in rtt stateset
+
+    // install a shadow-to-primary xform matrix (per frame) so verts match up
+    _shadowToPrimaryMatrix = _rttStateSet->getOrCreateUniform(
+        "oe_shadowToPrimaryMatrix", osg::Uniform::FLOAT_MAT4);
 
 
     _renderStateSet = new osg::StateSet();
-    
 
     // Establish a Virtual Program on the stateset.
     VirtualProgram* vp = VirtualProgram::getOrCreate(_renderStateSet.get());
+    vp->setName("ShadowCaster");
 
     // Load the shadowing shaders.
     Shaders package;
@@ -183,6 +185,36 @@ ShadowCaster::reinitialize()
     _shadowColorUniform = _renderStateSet->getOrCreateUniform("oe_shadow_color", osg::Uniform::FLOAT);
 
     _shadowColorUniform->set(_color);
+}
+
+void
+ShadowCaster::resizeGLObjectBuffers(unsigned maxSize)
+{
+    if (_light.valid())
+        _light->resizeGLObjectBuffers(maxSize);
+    if (_shadowmap.valid())
+        _shadowmap->resizeGLObjectBuffers(maxSize);
+    if (_rttStateSet.valid())
+        _rttStateSet->resizeGLObjectBuffers(maxSize);
+    if (_renderStateSet.valid())
+        _renderStateSet->resizeGLObjectBuffers(maxSize);
+    for(unsigned i=0; i<_rttCameras.size(); ++i)
+        _rttCameras[i]->resizeGLObjectBuffers(maxSize);
+}
+
+void
+ShadowCaster::releaseGLObjects(osg::State* state) const
+{
+    if (_light.valid())
+        _light->releaseGLObjects(state);
+    if (_shadowmap.valid())
+        _shadowmap->releaseGLObjects(state);
+    if (_rttStateSet.valid())
+        _rttStateSet->releaseGLObjects(state);
+    if (_renderStateSet.valid())
+        _renderStateSet->releaseGLObjects(state);
+    for(unsigned i=0; i<_rttCameras.size(); ++i)
+        _rttCameras[i]->releaseGLObjects(state);
 }
 
 void
@@ -220,8 +252,14 @@ ShadowCaster::traverse(osg::NodeVisitor& nv)
             lightUp = side ^ lightVectorWorld;
             lightUp.normalize();
             lightViewMat.makeLookAt(lightPosWorld, lightPosWorld+lightVectorWorld, lightUp);
+
+            // set the primary-camera-to-shadow-camera transformation matrix,
+            // which lets you perform vertex shader operations from the perspective
+            // of the primary camera (morphing, etc.) so that things match up
+            // between the two cameras.
+            osg::Matrix lightViewMatInv = osg::Matrix::inverse(lightViewMat);
+            _shadowToPrimaryMatrix->set( lightViewMatInv * MV);
             
-            //int i = nv.getFrameStamp()->getFrameNumber() % (_ranges.size()-1);
             int i;
             for(i=0; i < (int) _ranges.size()-1; ++i)
             {
@@ -233,7 +271,7 @@ ShadowCaster::traverse(osg::NodeVisitor& nv)
                 osg::Matrix proj = _prevProjMatrix;
                 double fovy,ar,zn,zf;
                 proj.getPerspective(fovy,ar,zn,zf);
-                proj.makePerspective(fovy,ar,std::max(n,zn),std::min(f,zf));
+                proj.makePerspective(fovy,ar,osg::maximum(n,zn),osg::minimum(f,zf));
                 
                 // extract the corner points of the camera frustum in world space.
                 osg::Matrix MVP = MV * proj;
@@ -252,8 +290,8 @@ ShadowCaster::traverse(osg::NodeVisitor& nv)
                     bbox.expandBy( (*v) * lightViewMat );
 
                 osg::Matrix lightProjMat;
-                n = -std::max(bbox.zMin(), bbox.zMax());
-                f = -std::min(bbox.zMin(), bbox.zMax());
+                n = -osg::maximum(bbox.zMin(), bbox.zMax());
+                f = -osg::minimum(bbox.zMin(), bbox.zMax());
                 // TODO: consider extending "n" so that objects outside the main view can still cast shadows
                 lightProjMat.makeOrtho(bbox.xMin(), bbox.xMax(), bbox.yMin(), bbox.yMax(), n, f);
 

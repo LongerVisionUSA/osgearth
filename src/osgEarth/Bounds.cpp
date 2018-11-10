@@ -17,7 +17,6 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>
  */
 #include <osgEarth/Bounds>
-#include <osgEarth/StringUtils>
 #include <osgEarth/SpatialReference>
 
 using namespace osgEarth;
@@ -147,7 +146,7 @@ Bounds::radius2d() const {
 
 double
 Bounds::area2d() const {
-    return width() * height();
+    return isValid() ? width() * height() : -1.0;
 }
 
 std::string
@@ -160,4 +159,16 @@ void
 Bounds::transform( const SpatialReference* from, const SpatialReference* to )
 {
     from->transformExtentToMBR( to, _min.x(), _min.y(), _max.x(), _max.y() );
+}
+
+void
+Bounds::set(double xmin, double ymin, double xmax, double ymax)
+{
+    osg::BoundingBoxd::set(xmin, ymin, -DBL_MAX, xmax, ymax, DBL_MAX);
+}
+
+void
+Bounds::set(double xmin, double ymin, double zmin, double xmax, double ymax, double zmax)
+{
+    osg::BoundingBoxd::set(xmin, ymin, zmin, xmax, ymax, zmax);
 }

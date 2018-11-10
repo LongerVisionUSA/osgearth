@@ -18,13 +18,10 @@
  */
 #include <osgEarthUtil/TMSPackager>
 #include <osgEarthUtil/TMS>
-#include <osgEarth/ImageUtils>
 #include <osgEarth/ImageToHeightFieldConverter>
-#include <osgEarth/TaskService>
 #include <osgEarth/FileUtils>
-#include <osgEarth/CacheEstimator>
+#include <osgEarth/ImageLayer>
 #include <osgDB/FileUtils>
-#include <osgDB/FileNameUtils>
 #include <osgDB/WriteFile>
 
 
@@ -87,6 +84,13 @@ bool WriteTMSTileHandler::handleTile(const TileKey& key, const TileVisitor& tv)
 
             if (_packager->getApplyAlphaMask())
             {
+                // Convert the image to RGBA if necessary
+                if (!ImageUtils::hasAlphaChannel(geoImage.getImage()))
+                {
+                    osg::ref_ptr< osg::Image > rgba = ImageUtils::convertToRGBA8(geoImage.getImage());
+                    geoImage = GeoImage(rgba.get(), geoImage.getExtent());
+                }
+
                 // mask out areas not included in the request:
                 for(std::vector<GeoExtent>::const_iterator g = tv.getExtents().begin();
                     g != tv.getExtents().end();
@@ -102,7 +106,7 @@ bool WriteTMSTileHandler::handleTile(const TileKey& key, const TileVisitor& tv)
             // convert to RGB if necessary
             if ( _packager->getExtension() == "jpg" && final->getPixelFormat() != GL_RGB )
             {
-                final = ImageUtils::convertToRGB8( final );
+                final = ImageUtils::convertToRGB8( final.get() );
             }
 
             // use the TileSource provided if set, else use writeImageFile
@@ -115,13 +119,13 @@ bool WriteTMSTileHandler::handleTile(const TileKey& key, const TileVisitor& tv)
             {
                 // attempt to create the output folder:
                 osgEarth::makeDirectoryForFile( path );
-                return osgDB::writeImageFile(*final, path, _packager->getOptions());
+                return osgDB::writeImageFile(*final.get(), path, _packager->getOptions());
             }
         }
     }
     else if (elevationLayer )
     {
-        GeoHeightField hf = elevationLayer->createHeightField( key );
+        GeoHeightField hf = elevationLayer->createHeightField(key, NULL);
         if (hf.valid())
         {
             // convert the HF to an image
@@ -145,7 +149,7 @@ bool WriteTMSTileHandler::handleTile(const TileKey& key, const TileVisitor& tv)
 
     // If we didn't produce a result but the key isn't within range then we should continue to
     // traverse the children b/c a min level was set.
-    if (!_layer->isKeyInRange(key))
+    if (!_layer->isKeyInLegalRange(key))
     {
         return true;
     }
@@ -154,12 +158,13 @@ bool WriteTMSTileHandler::handleTile(const TileKey& key, const TileVisitor& tv)
 
 bool WriteTMSTileHandler::hasData( const TileKey& key ) const
 {
-    TileSource* ts = _layer->getTileSource();
-    if (ts)
-    {
-        return ts->hasData(key);
-    }
-    return true;
+    return _layer->mayHaveData(key);
+    //TileSource* ts = _layer->getTileSource();
+    //if (ts)
+    //{
+    //    return ts->hasDataInExtent(key.getExtent());
+    //}
+    //return true;
 }
 
 std::string WriteTMSTileHandler::getProcessString() const
@@ -171,9 +176,12 @@ std::string WriteTMSTileHandler::getProcessString() const
     buf << "osgearth_package --tms ";
     if (imageLayer)
     {
-        for (int i = 0; i < _map->getNumImageLayers(); i++)
+        ImageLayerVector imageLayers;
+        _map->getLayers(imageLayers);
+
+        for (int i = 0; i < imageLayers.size(); i++)
         {
-            if (imageLayer == _map->getImageLayerAt(i))
+            if (imageLayer == imageLayers[i].get())
             {
                 buf << " --image " << i << " ";
                 break;
@@ -182,9 +190,12 @@ std::string WriteTMSTileHandler::getProcessString() const
     }
     else if (elevationLayer)
     {
-        for (int i = 0; i < _map->getNumElevationLayers(); i++)
+        ElevationLayerVector elevationLayers;
+        _map->getLayers(elevationLayers);
+
+        for (int i = 0; i < elevationLayers.size(); i++)
         {
-            if (elevationLayer == _map->getElevationLayerAt(i))
+            if (elevationLayer == elevationLayers[i].get())
             {
                 buf << " --elevation " << i << " ";
                 break;
@@ -320,7 +331,7 @@ void TMSPackager::setApplyAlphaMask(bool applyAlphaMask)
 
 TileVisitor* TMSPackager::getTileVisitor() const
 {
-    return _visitor;
+    return _visitor.get();
 }
 
 void TMSPackager::setVisitor(TileVisitor* visitor)
@@ -342,11 +353,14 @@ void TMSPackager::run( TerrainLayer* layer,  Map* map  )
         unsigned int index = 0;
         if (imageLayer)
         {
+            ImageLayerVector imageLayers;
+            map->getLayers(imageLayers);
+
             layerName << "image";
             // Get the index of the layer
-            for (int i = 0; i < map->getNumImageLayers(); i++)
+            for (int i = 0; i < imageLayers.size(); i++)
             {
-                if (map->getImageLayerAt(i) == imageLayer)
+                if (imageLayers[i].get() == imageLayer)
                 {
                     index = i;
                     break;
@@ -355,11 +369,14 @@ void TMSPackager::run( TerrainLayer* layer,  Map* map  )
         }
         else if (elevationLayer)
         {
+            ElevationLayerVector elevationLayers;
+            map->getLayers(elevationLayers);
+
             layerName << "elevation";
             // Get the index of the layer
-            for (int i = 0; i < map->getNumElevationLayers(); i++)
+            for (int i = 0; i < elevationLayers.size(); i++)
             {
-                if (map->getElevationLayerAt(i) == elevationLayer)
+                if (elevationLayers[i].get() == elevationLayer)
                 {
                     index = i;
                     break;
@@ -375,28 +392,13 @@ void TMSPackager::run( TerrainLayer* layer,  Map* map  )
         setLayerName(layer->getName());
     }
 
-
-
     if (imageLayer)
     {
         int tileSize = imageLayer->getTileSize();
         _width = tileSize;
         _height = tileSize;
-
-        // Figure out the extension if we haven't already assigned one.
         if (_extension.empty())
-        {
-            // Just default to whatever the source reports as it's extension.
-            _extension = imageLayer->getTileSource()->getExtension();
-        }
-
-        if (_extension == "jpg" && _applyAlphaMask)
-        {
             _extension = "png";
-            OE_NOTICE << LC << "Extension changed to PNG since output requires an alpha channel" << std::endl;
-        }
-
-        OE_INFO << LC << "Output extension: " << _extension << std::endl;
 
     }
     else if (elevationLayer)
@@ -410,14 +412,14 @@ void TMSPackager::run( TerrainLayer* layer,  Map* map  )
 
 
     _handler = new WriteTMSTileHandler(layer, map, this);
-    _visitor->setTileHandler( _handler );
+    _visitor->setTileHandler( _handler.get() );
     _visitor->run( map->getProfile() );
 }
 
-void TMSPackager::writeXML( TerrainLayer* layer, Map* map)
+void TMSPackager::writeXML(TerrainLayer* layer, Map* map)
 {
-    DataExtentList dataExtents;
-    layer->getDataExtents(dataExtents);
+    const DataExtentList& dataExtents = layer->getDataExtents();
+
      // create the tile map metadata:
     osg::ref_ptr<TMS::TileMap> tileMap = TMS::TileMap::create(
         "",
@@ -445,7 +447,7 @@ void TMSPackager::writeXML( TerrainLayer* layer, Map* map)
     tileMap->setTitle( _layerName );
     tileMap->setVersion( "1.0.0" );
     tileMap->getFormat().setMimeType( mimeType );
-    tileMap->generateTileSets( std::min(23u, maxLevel+1) );
+    tileMap->generateTileSets( osg::minimum(23u, maxLevel+1) );
 
 
     // write out the tilemap catalog:

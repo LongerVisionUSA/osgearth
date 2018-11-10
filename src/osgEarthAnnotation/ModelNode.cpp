@@ -26,11 +26,11 @@
 #include <osgEarthAnnotation/GeoPositionNodeAutoScaler>
 #include <osgEarthSymbology/Style>
 #include <osgEarthSymbology/InstanceSymbol>
-#include <osgEarth/AutoScale>
 #include <osgEarth/Registry>
 #include <osgEarth/Capabilities>
 #include <osgEarth/ShaderGenerator>
 #include <osgEarth/VirtualProgram>
+#include <osgEarth/NodeUtils>
 
 #define LC "[ModelNode] "
 
@@ -44,36 +44,35 @@ using namespace osgEarth::Symbology;
 
 ModelNode::ModelNode(MapNode*              mapNode,
                      const Style&          style,
-                     const osgDB::Options* dbOptions ) :
-GeoPositionNode    ( mapNode, GeoPoint() ),
-_style       ( style ),
-_dbOptions   ( dbOptions )
+                     const osgDB::Options* readOptions ) :
+GeoPositionNode(),
+_style( style ),
+_readOptions( readOptions )
 {
-    init();
+    construct();
+    setMapNode(mapNode);
+    compileModel();
 }
 
+void
+ModelNode::construct()
+{
+    // nop
+}
 
 void
 ModelNode::setStyle(const Style& style)
 {
     _style = style;
-    init();
+    compileModel();
 }
 
 void
-ModelNode::init()
+ModelNode::compileModel()
 {
     osgEarth::clearChildren( getPositionAttitudeTransform() );
 
     osg::ref_ptr<const ModelSymbol> sym = _style.get<ModelSymbol>();
-    
-    // backwards-compatibility: support for MarkerSymbol (deprecated)
-    if ( !sym.valid() && _style.has<MarkerSymbol>() )
-    {
-        OE_WARN << LC << "MarkerSymbol is deprecated, please remove it\n";
-        osg::ref_ptr<InstanceSymbol> temp = _style.get<MarkerSymbol>()->convertToInstanceSymbol();
-        sym = dynamic_cast<const ModelSymbol*>( temp.get() );
-    }
 
     if ( sym.valid() )
     {
@@ -89,12 +88,12 @@ ModelNode::init()
 
                 if ( sym->uriAliasMap()->empty() )
                 {
-                    node = uri.getNode( _dbOptions.get() );
+                    node = uri.getNode( _readOptions.get() );
                 }
                 else
                 {
                     // install an alias map if there's one in the symbology.
-                    osg::ref_ptr<osgDB::Options> tempOptions = Registry::instance()->cloneOrCreateOptions(_dbOptions.get());
+                    osg::ref_ptr<osgDB::Options> tempOptions = Registry::instance()->cloneOrCreateOptions(_readOptions.get());
                     tempOptions->setReadFileCallback( new URIAliasMapReadCallback(*sym->uriAliasMap(), uri.full()) );
                     node = uri.getNode( tempOptions.get() );
                 }
@@ -137,11 +136,15 @@ ModelNode::init()
                 if ( sym->scaleZ().isSet() )
                     scale.z() = sym->scaleZ()->eval();
 
-                getPositionAttitudeTransform()->setScale( scale );
+                if (scale != osg::Vec3d(1,1,1))
+                {
+                    getPositionAttitudeTransform()->setScale( scale );
+                }
 
                 // auto scaling?
                 if ( sym->autoScale() == true )
                 {
+                    this->setCullingActive(false);
                     this->addCullCallback( new GeoPositionNodeAutoScaler( osg::Vec3d(1,1,1), sym->minAutoScale().value(), sym->maxAutoScale().value() ));
                 } 
 
@@ -183,17 +186,22 @@ ModelNode::init()
 OSGEARTH_REGISTER_ANNOTATION( model, osgEarth::Annotation::ModelNode );
 
 
-ModelNode::ModelNode(MapNode* mapNode, const Config& conf, const osgDB::Options* dbOptions) :
-GeoPositionNode    ( mapNode, conf ),
-_dbOptions   ( dbOptions )
+ModelNode::ModelNode(const Config& conf, const osgDB::Options* readOptions) :
+GeoPositionNode(conf, readOptions),
+_readOptions(readOptions)
 {
-    conf.getObjIfSet( "style", _style );
+    construct();
+
+    conf.get( "style", _style );
 
     std::string uri = conf.value("url");
     if ( !uri.empty() )
         _style.getOrCreate<ModelSymbol>()->url() = StringExpression(uri);
 
-    init();
+    //init();
+    //setPosition(getPosition());
+
+    compileModel();
 }
 
 Config
@@ -203,7 +211,7 @@ ModelNode::getConfig() const
     conf.key() = "model";
 
     if ( !_style.empty() )
-        conf.addObj( "style", _style );
+        conf.set( "style", _style );
 
     return conf;
 }

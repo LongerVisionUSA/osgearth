@@ -23,6 +23,7 @@
 #include <osgDB/FileNameUtils>
 #include <osgEarth/Map>
 #include <osgEarth/MapNode>
+#include <osgEarth/NodeUtils>
 #include <osgEarthUtil/Sky>
 #include <osgEarthUtil/Controls>
 #include <osgEarthUtil/ExampleResources>
@@ -43,10 +44,12 @@ namespace osgEarth { namespace GLSky
                            public GLSkyOptions
     {
     public:
-        META_Object( osgEarth, GLSkyExtension );
+        META_OE_Extension( osgEarth, GLSkyExtension, sky_gl );
 
         GLSkyExtension() { }
         GLSkyExtension(const GLSkyOptions& options);
+
+        const ConfigOptions& getConfigOptions() const { return *this; }
 
     public: // ExtensionInterface<MapNode>
 
@@ -61,16 +64,16 @@ namespace osgEarth { namespace GLSky
     public: // ExtensionInterface<ui::Control>
 
         bool connect( ui::Control* );
-        bool disconnect( ui::Control* ) { return true; }
+        bool disconnect( ui::Control* );
 
     public: // SkyNodeFactory
 
-        SkyNode* createSkyNode(const Profile* profile);
+        SkyNode* createSkyNode();
 
     protected:
-        GLSkyExtension(const GLSkyExtension&, const osg::CopyOp&) { }
         virtual ~GLSkyExtension() { }
 
+        osg::ref_ptr<ui::Control> _ui;
         osg::ref_ptr<SkyNode> _skyNode;
     };
 
@@ -94,7 +97,16 @@ GLSkyOptions(options)
 bool
 GLSkyExtension::connect(MapNode* mapNode)
 {
-    _skyNode = createSkyNode(mapNode->getMap()->getProfile());
+    _skyNode = createSkyNode();
+
+    // Projected map? Set up a reference point at the center of the map
+    if (mapNode->getMapSRS()->isProjected())
+    {
+        GeoPoint refPoint;
+        mapNode->getMap()->getProfile()->getExtent().getCentroid(refPoint);
+        _skyNode->setReferencePoint(refPoint);
+    }
+
     osgEarth::insertParent(_skyNode.get(), mapNode);
     return true;
 }
@@ -102,6 +114,8 @@ GLSkyExtension::connect(MapNode* mapNode)
 bool
 GLSkyExtension::disconnect(MapNode* mapNode)
 {
+    osgEarth::removeGroup(_skyNode.get());
+    _skyNode = 0L;
     return true;
 }
 
@@ -124,8 +138,18 @@ GLSkyExtension::connect(ui::Control* control)
     return true;
 }
 
-SkyNode*
-GLSkyExtension::createSkyNode(const Profile* profile)
+bool
+GLSkyExtension::disconnect(ui::Control* control)
 {
-    return new GLSkyNode(profile, *this);
+    ui::Container* container = dynamic_cast<ui::Container*>(control);
+    if (container && _ui.valid())
+        container->removeChild(_ui.get());
+    return true;
+}
+
+SkyNode*
+GLSkyExtension::createSkyNode()
+{
+    GLSkyNode* sky = new GLSkyNode(*this);
+    return sky;
 }

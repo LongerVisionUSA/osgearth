@@ -20,7 +20,6 @@
 * along with this program.  If not, see <http://www.gnu.org/licenses/>
 */
 #include <osgEarth/Shadowing>
-#include <osg/ValueObject>
 
 #define LC "[Shadowing] "
 
@@ -30,13 +29,14 @@ using namespace osgEarth;
 void
 Shadowing::setIsShadowCamera(osg::Camera* camera)
 {
-    camera->setUserValue("oe_isShadowCamera", true);
+    osg::StateSet* ss = camera->getOrCreateStateSet();
+    ss->setDefine("OE_IS_SHADOW_CAMERA");
+    ss->setDefine("OE_IS_DEPTH_CAMERA");
 }
 
 bool
 Shadowing::isShadowCamera(const osg::Camera* camera)
 {
-    bool is = false;
-    camera->getUserValue("oe_isShadowCamera", is);
-    return is;
+    const osg::StateSet* ss = camera->getStateSet();
+    return ss && ss->getDefinePair("OE_IS_SHADOW_CAMERA") != 0L;
 }

@@ -18,24 +18,17 @@
  */
 
 #include <osgEarth/ImageUtils>
-#include <osgEarth/ThreadingUtils>
 #include <osgEarth/Registry>
 #include <osgEarth/Capabilities>
 #include <osgEarth/Random>
-#include <osgEarth/GeoCommon>
-#include <osg/Notify>
-#include <osg/Texture>
-#include <osg/ImageSequence>
-#include <osg/Timer>
-#include <osg/ValueObject>
 #include <osgDB/Registry>
-#include <string.h>
-#include <memory.h>
+
+#include <osg/ValueObject>
 
 #define LC "[ImageUtils] "
 
 
-#if defined(OSG_GLES1_AVAILABLE) || defined(OSG_GLES2_AVAILABLE)
+#if defined(OSG_GLES1_AVAILABLE) || defined(OSG_GLES2_AVAILABLE) || defined(OSG_GLES3_AVAILABLE)
 #    define GL_RGB8_INTERNAL  GL_RGB8_OES
 #    define GL_RGB8A_INTERNAL GL_RGBA8_OES
 #else
@@ -234,7 +227,7 @@ ImageUtils::resizeImage(const osg::Image* input,
         {
             output->allocateImage( out_s, out_t, input->r(), input->getPixelFormat(), input->getDataType(), input->getPacking() );
             output->setInternalTextureFormat( input->getInternalTextureFormat() );
-            markAsNormalized(output, isNormalized(input));
+            markAsNormalized(output.get(), isNormalized(input));
         }
         else
         {
@@ -257,11 +250,6 @@ ImageUtils::resizeImage(const osg::Image* input,
     {
         PixelReader read( input );
         PixelWriter write( output.get() );
-
-        unsigned int pixel_size_bytes = input->getRowSizeInBytes() / in_s;
-
-        unsigned char* dataOffset = output->getMipmapData(mipmapLevel);
-        unsigned int   dataRowSizeBytes = output->getRowSizeInBytes() >> mipmapLevel;
 
         for( unsigned int output_row=0; output_row < out_t; output_row++ )
         {
@@ -326,11 +314,11 @@ ImageUtils::resizeImage(const osg::Image* input,
                         // nearest neighbor:
                         int col = (input_col-(int)input_col) <= (ceil(input_col)-input_col) ?
                             (int)input_col :
-                            std::min( 1+(int)input_col, (int)in_s-1 );
+                            osg::minimum( 1+(int)input_col, (int)in_s-1 );
 
                         int row = (input_row-(int)input_row) <= (ceil(input_row)-input_row) ?
                             (int)input_row :
-                            std::min( 1+(int)input_row, (int)in_t-1 );
+                            osg::minimum( 1+(int)input_row, (int)in_t-1 );
 
                         color = read(col, row, layer); // read pixel from mip level 0.
 
@@ -367,9 +355,7 @@ ImageUtils::flattenImage(osg::Image*                             input,
         layer->setPixelAspectRatio(input->getPixelAspectRatio());
         markAsNormalized(layer, isNormalized(input));
 
-#if OSG_MIN_VERSION_REQUIRED(3,1,0)
         layer->setRowLength(input->getRowLength());
-#endif
         layer->setOrigin(input->getOrigin());
         layer->setFileName(input->getFileName());
         layer->setWriteHint(input->getWriteHint());
@@ -378,6 +364,127 @@ ImageUtils::flattenImage(osg::Image*                             input,
         output.push_back(layer);
     }
 
+    return true;
+}
+
+bool
+ImageUtils::bicubicUpsample(const osg::Image* source,
+                            osg::Image* target,
+                            unsigned quadrant,
+                            unsigned stride)
+{
+    const int border = 1; // don't change this.
+
+    int width = ((source->s() - 2*border)/2)+1 + 2*border;
+    int height = ((source->t() - 2*border)/2)+1 + 2*border;
+
+    int s_off = quadrant == 0 || quadrant == 2 ? 0 : source->s()-width;
+    int t_off = quadrant == 2 || quadrant == 3 ? 0 : source->t()-height;
+
+    ImageUtils::PixelReader readSource(source);
+    ImageUtils::PixelWriter writeTarget(target);
+    ImageUtils::PixelReader readTarget(target);
+
+    // copy the main box, which is all odd-numbered cells when there is a border size = 1.
+    for (int t = 1; t<height-1; ++t)
+    {
+        for (int s = 1; s<width-1; ++s)
+        {
+            osg::Vec4 value = readSource(s_off+s, t_off+t);
+            writeTarget(value, (s-1)*2+1, (t-1)*2+1);
+        }
+    }
+
+    // copy the corner border cells.
+    writeTarget(readSource(s_off, t_off), 0, 0); // upper left.
+    writeTarget(readSource(s_off + width - 1, t_off), target->s()-1, 0);
+    writeTarget(readSource(s_off, t_off + height - 1), 0, target->t()-1);
+    writeTarget(readSource(s_off + width - 1, t_off + height - 1), target->s() - 1, target->t() - 1);
+
+    // copy the border intermediate cells.
+    for (int s=1; s<width-1; ++s) // top/bottom:
+    {
+        writeTarget(readSource(s_off+s, t_off), (s-1)*2+1, 0);
+        writeTarget(readSource(s_off+s, t_off + height - 1), (s-1)*2+1, target->t()-1);
+    }
+    for (int t = 1; t < height-1; ++t) // left/right:
+    {
+        writeTarget(readSource(s_off, t_off+t), 0, (t-1)*2+1);
+        writeTarget(readSource(s_off + width - 1, t_off + t), target->s()-1, (t-1)*2+1);
+    }
+
+    // now interpolate the missing columns, including the border cells.
+    for (int s = 2; s<target->s()-2; s += 2)
+    {
+        for (int t = 0; t < target->t(); )
+        {
+            int offset = (s-1) % stride; // the minus1 accounts for the border
+            int s0 = osg::maximum(s - offset, 0);
+            int s1 = osg::minimum(s0 + (int)stride, target->s()-1);
+            double mu = (double)offset / (double)(s1-s0);
+            osg::Vec4 p1 = readTarget(s0, t);
+            osg::Vec4 p2 = readTarget(s1, t);
+            double mu2 = (1.0 - cos(mu*osg::PI))*0.5;
+            osg::Vec4 v = (p1*(1.0-mu2)) + (p2*mu2);
+            writeTarget(v, s, t);
+
+            if (t == 0 || t == target->t()-2) t+=1; else t+=2;
+        }
+    }
+
+    // next interpolate the odd numbered rows
+    for (int s = 0; s < target->s();)
+    {
+        for (int t = 2; t<target->t()-2; t += 2)
+        {
+            int offset = (t-1) % stride; // the minus1 accounts for the border
+            int t0 = osg::maximum(t - offset, 0);
+            int t1 = osg::minimum(t0 + (int)stride, target->t()-1);
+            double mu = (double)offset / double(t1-t0);
+
+            osg::Vec4 p1 = readTarget(s, t0);
+            osg::Vec4 p2 = readTarget(s, t1);
+            double mu2 = (1.0 - cos(mu*osg::PI))*0.5;
+            osg::Vec4 v = (p1*(1.0-mu2)) + (p2*mu2);
+            writeTarget(v, s, t);
+        }
+
+        if (s == 0 || s == target->s()-2) s+=1; else s+=2;
+    }
+
+    // then interpolate the centers
+    for (int s = 2; s<target->s()-2; s += 2)
+    {
+        for (int t = 2; t<target->t()-2; t += 2)
+        {
+            int s_offset = (s-1) % stride;
+            int s0 = osg::maximum(s - s_offset, 0);
+            int s1 = osg::minimum(s0 + (int)stride, target->s()-1);
+
+            int t_offset = (t-1) % stride;
+            int t0 = osg::maximum(t - t_offset, 0);
+            int t1 = osg::minimum(t0 + (int)stride, target->t()-1);
+
+            double mu, mu2;
+
+            osg::Vec4 p1 = readTarget(s0, t);
+            osg::Vec4 p2 = readTarget(s1, t);
+            mu = (double)s_offset / (double)(s1-s0);
+            mu2 = (1.0 - cos(mu*osg::PI))*0.5;
+            osg::Vec4 v1 = (p1*(1.0-mu2)) + (p2*mu2);
+            
+            osg::Vec4 p3 = readTarget(s, t0);
+            osg::Vec4 p4 = readTarget(s, t1);
+            mu = (double)t_offset / (double)(t1-t0);
+            mu2 = (1.0 - cos(mu*osg::PI))*0.5;
+            osg::Vec4 v2 = (p3*(1.0-mu2)) + (p4*mu2);
+
+            osg::Vec4 v = (v1+v2)*0.5;
+
+            writeTarget(v, s, t);
+        }
+    }
+    
     return true;
 }
 
@@ -424,8 +531,8 @@ ImageUtils::buildNearestNeighborMipmaps(const osg::Image* input)
     for( int level=0; level<numMipmapLevels; ++level )
     {
         osg::ref_ptr<osg::Image> temp;
-        ImageUtils::resizeImage(input2, level_s, level_t, result, level, false);
-        ImageUtils::resizeImage(input2, level_s, level_t, temp, 0, false);
+        ImageUtils::resizeImage(input2.get(), level_s, level_t, result, level, false);
+        ImageUtils::resizeImage(input2.get(), level_s, level_t, temp, 0, false);
         level_s >>= 1;
         level_t >>= 1;
         input2 = temp.get();
@@ -487,6 +594,82 @@ ImageUtils::createMipmapBlendedImage( const osg::Image* primary, const osg::Imag
     }
 
     return result.release();
+}
+
+osgDB::ReaderWriter*
+ImageUtils::getReaderWriterForStream(std::istream& stream) {
+    // Modified from https://oroboro.com/image-format-magic-bytes/
+
+    // Get the length of the stream
+    stream.seekg(0, std::ios::end);
+    unsigned int len = stream.tellg();
+    stream.seekg(0, std::ios::beg);
+
+    if (len < 16) return 0;
+
+    //const char* data = input.c_str();
+    // Read a 16 byte header
+    char data[16];
+    stream.read(data, 16);
+    // Reset reading
+    stream.seekg(0, std::ios::beg);
+
+    // .jpg:  FF D8 FF
+    // .png:  89 50 4E 47 0D 0A 1A 0A
+    // .gif:  GIF87a      
+    //        GIF89a
+    // .tiff: 49 49 2A 00
+    //        4D 4D 00 2A
+    // .bmp:  BM 
+    // .webp: RIFF ???? WEBP 
+    // .ico   00 00 01 00
+    //        00 00 02 00 ( cursor files )
+    switch (data[0])
+    {
+    case '\xFF':
+        return (!strncmp((const char*)data, "\xFF\xD8\xFF", 3)) ?
+            osgDB::Registry::instance()->getReaderWriterForExtension("jpg") : 0;
+
+    case '\x89':
+        return (!strncmp((const char*)data,
+            "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A", 8)) ?
+            osgDB::Registry::instance()->getReaderWriterForExtension("png") : 0;
+
+    case 'G':
+        return (!strncmp((const char*)data, "GIF87a", 6) ||
+            !strncmp((const char*)data, "GIF89a", 6)) ?
+            osgDB::Registry::instance()->getReaderWriterForExtension("gif") : 0;
+
+    case 'I':
+        return (!strncmp((const char*)data, "\x49\x49\x2A\x00", 4)) ?
+            osgDB::Registry::instance()->getReaderWriterForExtension("tif") : 0;
+
+    case 'M':
+        return (!strncmp((const char*)data, "\x4D\x4D\x00\x2A", 4)) ?
+            osgDB::Registry::instance()->getReaderWriterForExtension("tif") : 0;
+
+    case 'B':
+        return ((data[1] == 'M')) ?
+            osgDB::Registry::instance()->getReaderWriterForExtension("bmp") : 0;
+
+    default:
+        return 0;
+    }
+}
+
+osg::Image*
+ImageUtils::readStream(std::istream& stream, const osgDB::Options* options) {
+
+    osgDB::ReaderWriter* rw = getReaderWriterForStream(stream);
+    if (!rw) {
+        return 0;
+    }
+
+    osgDB::ReaderWriter::ReadResult rr = rw->readImage(stream, options);
+    if (rr.validImage()) {
+        return rr.takeImage();
+    }
+    return 0;
 }
 
 namespace
@@ -722,7 +905,6 @@ ImageUtils::upSampleNN(const osg::Image* src, int quadrant)
     int seed = *(int*)dst->data(0,0);
 
     Random rng(seed+quadrant);
-    int c = 0;
 
     for(int t=0; t<dst->t(); t+=2)
     {
@@ -853,7 +1035,7 @@ ImageUtils::computeTextureCompressionMode(const osg::Image*                 imag
 
     const Capabilities& caps = Registry::capabilities();
 
-#ifndef OSG_GLES2_AVAILABLE
+#if !defined(OSG_GLES2_AVAILABLE) && !defined(OSG_GLES3_AVAILABLE)
 
     if (image->getPixelFormat() == GL_RGBA && image->getPixelSizeInBits() == 32) 
     {
@@ -1091,7 +1273,7 @@ ImageUtils::hasAlphaChannel(const osg::Image* image)
 bool
 ImageUtils::hasTransparency(const osg::Image* image, float threshold)
 {
-    if ( !image || !PixelReader::supports(image) )
+    if ( !image || !hasAlphaChannel(image) || !PixelReader::supports(image) )
         return false;
 
     PixelReader read(image);
@@ -1102,6 +1284,38 @@ ImageUtils::hasTransparency(const osg::Image* image, float threshold)
                     return true;
 
     return false;
+}
+
+
+void
+ImageUtils::activateMipMaps(osg::Texture* tex)
+{
+#ifdef OSGEARTH_ENABLE_NVTT_CPU_MIPMAPS
+    // Verify that this texture requests mipmaps:
+    osg::Texture::FilterMode minFilter = tex->getFilter(tex->MIN_FILTER);
+
+    bool needsMipmaps =
+        minFilter == tex->LINEAR_MIPMAP_LINEAR ||
+        minFilter == tex->LINEAR_MIPMAP_NEAREST ||
+        minFilter == tex->NEAREST_MIPMAP_LINEAR ||
+        minFilter == tex->NEAREST_MIPMAP_NEAREST;
+
+    if (needsMipmaps && tex->getNumImages() > 0)
+    {
+        // See if we have a CPU mipmap generator:
+        osgDB::ImageProcessor* ip = osgDB::Registry::instance()->getImageProcessor();
+        if (ip)
+        {
+            for (unsigned i = 0; i < tex->getNumImages(); ++i)
+            {
+                if (tex->getImage(i)->getNumMipmapLevels() <= 1)
+                {
+                    ip->generateMipMap(*tex->getImage(i), true, ip->USE_CPU);
+                }
+            }
+        }
+    }
+#endif
 }
 
 
@@ -1352,6 +1566,27 @@ namespace
 
     template<typename T>
     struct ColorWriter<GL_LUMINANCE, T>
+    {
+        static void write(const ImageUtils::PixelWriter* iw, const osg::Vec4f& c, int s, int t, int r, int m)
+        {
+            T* ptr = (T*)iw->data(s, t, r, m);
+            (*ptr) = (T)(c.r() / GLTypeTraits<T>::scale(iw->_normalized));
+        }
+    };
+
+    template<typename T>
+    struct ColorReader<GL_RED, T>
+    {
+        static osg::Vec4 read(const ImageUtils::PixelReader* ia, int s, int t, int r, int m)
+        {
+            const T* ptr = (const T*)ia->data(s, t, r, m);
+            float l = float(*ptr) * GLTypeTraits<T>::scale(ia->_normalized);
+            return osg::Vec4(l, l, l, 1.0f);
+        }
+    };
+
+    template<typename T>
+    struct ColorWriter<GL_RED, T>
     {
         static void write(const ImageUtils::PixelWriter* iw, const osg::Vec4f& c, int s, int t, int r, int m)
         {
@@ -1654,6 +1889,8 @@ namespace
             return &ColorReader<GL_UNSIGNED_SHORT_5_5_5_1, GLushort>::read;
         case GL_UNSIGNED_BYTE_3_3_2:
             return &ColorReader<GL_UNSIGNED_BYTE_3_3_2, GLubyte>::read;
+        case GL_UNSIGNED_INT_8_8_8_8_REV:
+            return &ColorReader<GLFormat, GLubyte>::read;
         default:
             return &ColorReader<0, GLbyte>::read;
         }
@@ -1669,7 +1906,10 @@ namespace
             break;
         case GL_LUMINANCE:
             return chooseReader<GL_LUMINANCE>(dataType);
-            break;        
+            break;   
+        case GL_RED:
+            return chooseReader<GL_RED>(dataType);
+            break;       
         case GL_ALPHA:
             return chooseReader<GL_ALPHA>(dataType);
             break;        
@@ -1699,41 +1939,56 @@ namespace
 }
     
 ImageUtils::PixelReader::PixelReader(const osg::Image* image) :
-_image     (image),
 _bilinear  (false)
 {
-    _normalized = ImageUtils::isNormalized(image);
-    _colMult = _image->getPixelSizeInBits() / 8;
-    _rowMult = _image->getRowSizeInBytes();
-    _imageSize = _image->getImageSizeInBytes();
-    GLenum dataType = _image->getDataType();
-    _reader = getReader( _image->getPixelFormat(), dataType );
-    if ( !_reader )
+    setImage(image);
+}
+
+void
+ImageUtils::PixelReader::setImage(const osg::Image* image)
+{
+    _image = image;
+    if (image)
     {
-        OE_WARN << "[PixelReader] No reader found for pixel format " << std::hex << _image->getPixelFormat() << std::endl; 
-        _reader = &ColorReader<0,GLbyte>::read;
+        _normalized = ImageUtils::isNormalized(image);
+        _colMult = _image->getPixelSizeInBits() / 8;
+        _rowMult = _image->getRowSizeInBytes();
+        _imageSize = _image->getImageSizeInBytes();
+        GLenum dataType = _image->getDataType();
+        _reader = getReader( _image->getPixelFormat(), dataType );
+        if ( !_reader )
+        {
+            OE_WARN << "[PixelReader] No reader found for pixel format " << std::hex << _image->getPixelFormat() << std::endl; 
+            _reader = &ColorReader<0,GLbyte>::read;
+        }
     }
 }
 
 osg::Vec4
 ImageUtils::PixelReader::operator()(float u, float v, int r, int m) const
+{
+    return operator()((double)u, (double)v, r, m);
+}
+
+osg::Vec4
+ImageUtils::PixelReader::operator()(double u, double v, int r, int m) const
  {
      if ( _bilinear )
      {
-         float sizeS = (float)(_image->s()-1);
-         float sizeT = (float)(_image->t()-1);
+         double sizeS = (double)(_image->s()-1);
+         double sizeT = (double)(_image->t()-1);
 
          // u, v => [0..1]
-         float s = u * sizeS;
-         float t = v * sizeT;
+         double s = u * sizeS;
+         double t = v * sizeT;
 
-         float s0 = std::max(floorf(s), 0.0f);
-         float s1 = std::min(s0+1.0f, sizeS);
-         float smix = s0 < s1 ? (s-s0)/(s1-s0) : 0.0f;
+         double s0 = osg::maximum(floorf(s), 0.0f);
+         double s1 = osg::minimum(s0+1.0f, sizeS);
+         double smix = s0 < s1 ? (s-s0)/(s1-s0) : 0.0f;
 
-         float t0 = std::max(floorf(t), 0.0f);
-         float t1 = std::min(t0+1.0f, sizeT);
-         float tmix = t0 < t1 ? (t-t0)/(t1-t0) : 0.0f;
+         double t0 = osg::maximum(floorf(t), 0.0f);
+         double t1 = osg::minimum(t0+1.0f, sizeT);
+         double tmix = t0 < t1 ? (t-t0)/(t1-t0) : 0.0f;
 
          osg::Vec4 UL = (*_reader)(this, (int)s0, (int)t0, r, m); // upper left
          osg::Vec4 UR = (*_reader)(this, (int)s1, (int)t0, r, m); // upper right
@@ -1748,8 +2003,8 @@ ImageUtils::PixelReader::operator()(float u, float v, int r, int m) const
      else
      {
          return (*_reader)(this,
-             (int)(u * (float)(_image->s()-1)),
-             (int)(v * (float)(_image->t()-1)),
+             (int)(u * (double)(_image->s()-1)),
+             (int)(v * (double)(_image->t()-1)),
              r, m);
      }
 }
@@ -1801,7 +2056,10 @@ namespace
             break;
         case GL_LUMINANCE:
             return chooseWriter<GL_LUMINANCE>(dataType);
-            break;        
+            break;      
+        case GL_RED:
+            return chooseWriter<GL_RED>(dataType);
+            break;         
         case GL_ALPHA:
             return chooseWriter<GL_ALPHA>(dataType);
             break;        
@@ -1830,16 +2088,19 @@ namespace
 ImageUtils::PixelWriter::PixelWriter(osg::Image* image) :
 _image(image)
 {
-    _normalized = ImageUtils::isNormalized(image);
-    _colMult = _image->getPixelSizeInBits() / 8;
-    _rowMult = _image->getRowSizeInBytes();
-    _imageSize = _image->getImageSizeInBytes();
-    GLenum dataType = _image->getDataType();
-    _writer = getWriter( _image->getPixelFormat(), dataType );
-    if ( !_writer )
+    if (image)
     {
-        OE_WARN << "[PixelWriter] No writer found for pixel format " << std::hex << _image->getPixelFormat() << std::endl; 
-        _writer = &ColorWriter<0, GLbyte>::write;
+        _normalized = ImageUtils::isNormalized(image);
+        _colMult = _image->getPixelSizeInBits() / 8;
+        _rowMult = _image->getRowSizeInBytes();
+        _imageSize = _image->getImageSizeInBytes();
+        GLenum dataType = _image->getDataType();
+        _writer = getWriter( _image->getPixelFormat(), dataType );
+        if ( !_writer )
+        {
+            OE_WARN << "[PixelWriter] No writer found for pixel format " << std::hex << _image->getPixelFormat() << std::endl; 
+            _writer = &ColorWriter<0, GLbyte>::write;
+        }
     }
 }
 
@@ -1876,30 +2137,6 @@ TextureAndImageVisitor::apply(osg::Node& node)
         apply(*node.getStateSet());
 
     traverse(node);
-}
-
-void
-TextureAndImageVisitor::apply(osg::Geode& geode)
-{
-    if (geode.getStateSet())
-        apply(*geode.getStateSet());
-
-    for (unsigned i = 0; i < geode.getNumDrawables(); ++i) {
-        apply(*geode.getDrawable(i));
-        //if (geode.getDrawable(i) && geode.getDrawable(i)->getStateSet())
-        //    apply(*geode.getDrawable(i)->getStateSet());
-    }
-
-    //traverse(geode);
-}
-
-void
-TextureAndImageVisitor::apply(osg::Drawable& drawable)
-{
-    if (drawable.getStateSet())
-        apply(*drawable.getStateSet());
-
-    //traverse(drawable);
 }
 
 void

@@ -21,8 +21,7 @@
 using namespace osgEarth;
 using namespace osgEarth::Symbology;
 
-Query::Query( const Config& conf ):
-_map(0)
+Query::Query( const Config& conf )
 {
     mergeConfig( conf );
 }
@@ -32,7 +31,7 @@ _bounds(rhs._bounds),
 _expression(rhs._expression),
 _orderby(rhs._orderby),
 _tileKey(rhs._tileKey),
-_map(rhs._map)
+_limit(rhs._limit)
 {
     //nop
 }
@@ -40,12 +39,12 @@ _map(rhs._map)
 void
 Query::mergeConfig( const Config& conf )
 {
-    if ( !conf.getIfSet( "expr", _expression ) )
-        if ( !conf.getIfSet( "where", _expression ) )
-            if ( !conf.getIfSet( "sql", _expression ) )
-                conf.getIfSet( "expression", _expression );
+    if ( !conf.get( "expr", _expression ) )
+        if ( !conf.get( "where", _expression ) )
+            if ( !conf.get( "sql", _expression ) )
+                conf.get( "expression", _expression );
 
-    conf.getIfSet("orderby", _orderby);
+    conf.get("orderby", _orderby);
 
     Config b = conf.child( "extent" );
     if( !b.empty() )
@@ -56,14 +55,17 @@ Query::mergeConfig( const Config& conf )
             b.value<double>( "xmax", 0.0 ),
             b.value<double>( "ymax", 0.0 ) );
     }
+
+    conf.get("limit", _limit);
 }
 
 Config
 Query::getConfig() const
 {
     Config conf( "query" );
-    conf.addIfSet( "expr", _expression );
-    conf.addIfSet( "orderby", _orderby);
+    conf.set( "expr", _expression );
+    conf.set( "orderby", _orderby);
+    conf.set( "limit", _limit);
     if ( _bounds.isSet() ) {
         Config bc( "extent" );
         bc.add( "xmin", toString(_bounds->xMin()) );
@@ -127,14 +129,4 @@ Query::combineWith( const Query& rhs ) const
     }
 
     return merged;
-}
-
-const Map* Query::getMap() const
-{
-    return _map;
-}
-
-void Query::setMap(const Map* map)
-{
-    _map = map;
 }
