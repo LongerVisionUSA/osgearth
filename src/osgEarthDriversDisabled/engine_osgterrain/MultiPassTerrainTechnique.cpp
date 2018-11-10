@@ -99,7 +99,7 @@ MultiPassTerrainTechnique::init()
     
     generateGeometry(masterLocator, centerModel);   
 
-    if (_transform.valid()) _transform->setThreadSafeReferenceCounting(true);
+    //if (_transform.valid()) _transform->setThreadSafeReferenceCounting(true);
 }
 
 osgTerrain::Locator*
